@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# news-feed POC launcher. Owns host ports 8330–8332. Four containers: db, redis,
+# api, and a separate fan-out worker.
+#   ./run [up]   free ports, (re)build, start, wait healthy, print endpoints
+#   ./run stop   tear everything down
+#   ./run test   smoke + the hybrid fan-out demonstration
+#   ./run logs   follow logs (add 'worker' to follow just the worker)
+set -euo pipefail
+cd "$(dirname "$0")"
+
+PORTS=(8330 8331 8332)
+API="http://localhost:8330"
+
+free_ports() {
+  for p in "${PORTS[@]}"; do
+    local pids
+    pids=$(lsof -ti "tcp:${p}" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+      echo "  freeing port $p (kill $pids)"
+      kill -9 $pids 2>/dev/null || true
+    fi
+  done
+}
+
+case "${1:-up}" in
+  up|"")
+    echo "▶ news-feed POC: clearing any previous run + squatters on ${PORTS[*]}"
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    free_ports
+    echo "▶ building + starting (api + fan-out worker)"
+    docker compose up -d --build --wait
+    echo
+    echo "✅ up."
+    echo "   API       $API        (docs: $API/docs)"
+    echo "   Postgres  localhost:8331  (feed/feed)"
+    echo "   Redis     localhost:8332"
+    echo "   Worker    (background container — ./run logs worker)"
+    echo
+    echo "Try it:"
+    echo "   curl -s -XPOST $API/follow -H 'content-type: application/json' -d '{\"follower_id\":1,\"followee_id\":2}'"
+    echo "   curl -s -XPOST $API/posts  -H 'content-type: application/json' -d '{\"author_id\":2,\"content\":\"hello\"}'"
+    echo "   curl -s '$API/feed?user_id=1' | python3 -m json.tool"
+    echo "   ./run test                 # fan-out vs celebrity read-time merge"
+    ;;
+  stop|down)
+    docker compose down --remove-orphans
+    ;;
+  check)
+    echo "▶ static type check (mypy --strict)"
+    uv run --quiet mypy
+    ;;
+  test)
+    echo "▶ static type check (mypy --strict)"
+    uv run --quiet mypy
+    echo "▶ smoke test (against $API)"
+    python3 tests/smoke.py "$API"
+    echo "▶ hybrid fan-out demonstration"
+    python3 tests/fanout.py "$API"
+    ;;
+  logs)
+    shift || true
+    docker compose logs -f --tail=100 "$@"
+    ;;
+  *)
+    echo "usage: ./run [up|stop|check|test|logs]" >&2
+    exit 1
+    ;;
+esac

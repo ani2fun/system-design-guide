@@ -1,0 +1,57 @@
+{
+    // Each proof of concept under _proof-of-concepts/ is an independent uv project with its
+    // own .venv (created by `uv sync`), so there is no single interpreter that resolves them
+    // all. Listing every project root makes its `app` package resolve, and every project's
+    // site-packages makes its third-party imports resolve; a path is simply inert until that
+    // project has been synced. All 22 target Python 3.12.
+
+    "python.defaultInterpreterPath": "${workspaceFolder}/_proof-of-concepts/02-data-foundations/02-storage-engines/.venv/bin/python",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/_proof-of-concepts/02-data-foundations/02-storage-engines",
+        "${workspaceFolder}/_proof-of-concepts/02-data-foundations/02-storage-engines/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/02-data-foundations/03-indexing",
+        "${workspaceFolder}/_proof-of-concepts/02-data-foundations/03-indexing/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/02-data-foundations/05-encoding-and-evolution",
+        "${workspaceFolder}/_proof-of-concepts/02-data-foundations/05-encoding-and-evolution/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/03-distributed-data/02-sharding-and-consistent-hashing",
+        "${workspaceFolder}/_proof-of-concepts/03-distributed-data/02-sharding-and-consistent-hashing/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/03-distributed-data/03-transactions-and-isolation",
+        "${workspaceFolder}/_proof-of-concepts/03-distributed-data/03-transactions-and-isolation/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/04-building-blocks/01-load-balancing-and-gateways",
+        "${workspaceFolder}/_proof-of-concepts/04-building-blocks/01-load-balancing-and-gateways/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/04-building-blocks/08-search",
+        "${workspaceFolder}/_proof-of-concepts/04-building-blocks/08-search/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/04-building-blocks/11-probabilistic-data-structures",
+        "${workspaceFolder}/_proof-of-concepts/04-building-blocks/11-probabilistic-data-structures/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/05-patterns/08-event-driven-cqrs-outbox-cdc",
+        "${workspaceFolder}/_proof-of-concepts/05-patterns/08-event-driven-cqrs-outbox-cdc/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/01-url-shortener",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/01-url-shortener/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/02-ticketmaster",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/02-ticketmaster/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/03-news-feed",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/03-news-feed/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/04-whatsapp",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/04-whatsapp/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/05-dropbox",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/05-dropbox/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/06-youtube",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/06-youtube/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/07-uber",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/07-uber/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/08-web-crawler",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/08-web-crawler/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/09-rate-limiter",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/09-rate-limiter/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/10-ad-click-aggregator",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/10-ad-click-aggregator/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/11-google-docs",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/11-google-docs/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/12-stripe-payments",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/12-stripe-payments/.venv/lib/python3.12/site-packages",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/13-job-scheduler",
+        "${workspaceFolder}/_proof-of-concepts/06-case-studies/13-job-scheduler/.venv/lib/python3.12/site-packages"
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.terminal.activateEnvironment": true
+}

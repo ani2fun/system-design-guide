@@ -1,0 +1,19 @@
+[project]
+name = "poc-search"
+version = "0.0.0"
+description = "Inverted index + TF-IDF/BM25 + scatter-gather POC — system-design-from-first-principles building-blocks/search"
+requires-python = ">=3.12"
+dependencies = []  # pure standard library
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["mypy==1.13.0"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_redundant_casts = true
+# Strict-type the production layers; tests are verified by running them.
+files = ["domain", "app"]

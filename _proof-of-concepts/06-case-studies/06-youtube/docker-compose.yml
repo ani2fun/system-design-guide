@@ -1,0 +1,25 @@
+# YouTube POC — transcoding pipeline + Redis. Port block 8370–8371.
+name: poc-youtube
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["8371:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    ports: ["8370:8000"]
+    depends_on:
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30

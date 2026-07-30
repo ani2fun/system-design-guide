@@ -1,0 +1,97 @@
+// system-design-from-first-principles · case study 06 — "Design YouTube".
+// Container level: presigned uploads land originals in a raw store; a transcoding pipeline fans
+// each video out into a resolution×codec rendition matrix and fans back in to assemble adaptive
+// manifests; the CDN serves segments to players, with the origin stores behind it. Code level
+// (C4 L4): the three classes inside the transcoding pipeline, mirrored by the POC at _proof-of-concepts/06-case-studies/06-youtube/ (deferred to the POC phase — `link`s are the contract). Click-docs live
+// in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `ryt` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rytUser = actor 'Creator / Viewer' {
+    description 'Uploads videos (up to GBs) and watches them with adaptive quality on any network.'
+  }
+
+  rytSys = system 'YouTube' {
+    description 'Upload → process → serve, each at a different scale; the read:write asymmetry is extreme.'
+
+    rytApi = service 'Upload & metadata API' {
+      description 'Mints resumable presigned uploads, owns video metadata and watch endpoints. Bytes never pass through it.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+    rytRaw = objectStorage 'Raw upload store' {
+      description 'The original files, exactly as uploaded. Input to the pipeline; never served to viewers.'
+      technology 'S3-style object store'
+      icon aws:simple-storage-service
+    }
+    rytQueue = messageQueue 'Transcode task queue' {
+      description 'Upload-complete events and per-segment transcode tasks; the async boundary that absorbs upload bursts.'
+      technology 'Queue'
+    }
+    rytPipeline = worker 'Transcoding pipeline' {
+      description 'The DAG: split into segments, transcode each across the rendition matrix in parallel, assemble manifests when every piece lands.'
+      technology 'Python workers'
+      icon tech:python
+
+      rytCodeDagOrchestrator = code 'DagOrchestrator' {
+        description 'Expands one video into segment×rendition tasks, tracks DAG state, retries failed tasks at task granularity — a re-run must be safe.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/06-youtube/pipeline/dag_orchestrator.py
+      }
+      rytCodeSegmentTranscoder = code 'SegmentTranscoder' {
+        description 'Transcodes ONE segment into ONE rendition. Idempotent by construction: output is content-addressed, so re-execution overwrites with identical bytes.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/06-youtube/pipeline/segment_transcoder.py
+      }
+      rytCodeManifestAssembler = code 'ManifestAssembler' {
+        description 'The fan-in: when all renditions of all segments exist, writes the adaptive manifests and flips the video to watchable.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/06-youtube/pipeline/manifest_assembler.py
+      }
+
+      rytCodeDagOrchestrator -> rytCodeSegmentTranscoder 'schedule segment×rendition tasks'
+      rytCodeDagOrchestrator -> rytCodeManifestAssembler 'all done → assemble'
+    }
+    rytRenditions = objectStorage 'Rendition store' {
+      description 'Transcoded segments + manifests, content-addressed. The CDN\'s origin.'
+      technology 'S3-style object store'
+      icon aws:simple-storage-service
+    }
+    rytMeta = relationalDatabase 'Video metadata DB' {
+      description 'Video state machine (uploading → processing → live), titles, rendition inventory.'
+      technology 'PostgreSQL'
+    }
+    rytCdn = cdn 'CDN' {
+      description 'The real video server: manifests and segments at the edge; origin fills on miss.'
+      technology 'CDN'
+    }
+
+    rytApi -> rytRaw 'mint resumable presigned uploads'
+    rytApi -> rytMeta 'video state · watch metadata'
+    rytRaw -> rytQueue 'upload-complete event'
+    rytQueue -> rytPipeline 'deliver transcode work'
+    rytPipeline -> rytRaw 'read original segments'
+    rytPipeline -> rytRenditions 'write renditions + manifests'
+    rytPipeline -> rytMeta 'flip state → live'
+    rytCdn -> rytRenditions 'fill on miss'
+
+    rytCodeSegmentTranscoder -> rytRenditions 'content-addressed writes'
+    rytCodeManifestAssembler -> rytMeta 'video → live'
+  }
+
+  rytUser -> rytSys 'upload · browse · watch'
+  rytUser -> rytRaw 'chunked presigned PUT (direct)'
+  rytUser -> rytCdn 'manifests + segments (adaptive playback)'
+}
+
+views {
+  view sdfp_youtube_container of rytSys {
+    title 'YouTube — container view (final architecture)'
+    include rytUser, rytSys, rytApi, rytRaw, rytQueue, rytPipeline, rytRenditions, rytMeta, rytCdn
+  }
+
+  view sdfp_youtube_code of rytPipeline {
+    title 'YouTube — code level (inside the transcoding pipeline)'
+    include rytPipeline, rytCodeDagOrchestrator, rytCodeSegmentTranscoder, rytCodeManifestAssembler,
+      rytQueue, rytRaw, rytRenditions, rytMeta
+  }
+}

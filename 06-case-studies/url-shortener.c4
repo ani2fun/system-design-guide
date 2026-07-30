@@ -1,0 +1,89 @@
+// system-design-from-first-principles · case study 01 — "Design a URL Shortener".
+// Container level: stateless API nodes leasing counter ranges, a Redis redirect cache in front
+// of the link store, and the click stream split off asynchronously. Code level (C4 L4): the four
+// classes inside the API service, mirrored 1:1 by the POC at _proof-of-concepts/06-case-studies/01-url-shortener/ (each
+// element links to its source file). Click any element in the rendered views for its tutorial
+// doc — served from ../06-case-studies/_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rus` prefix (flat, global, merged /c4 namespace). No `specification`
+// here — the ONE workspace spec (actor/system/container/component/code) lives in
+// synapse-features/03-architecture-docs/client-server.c4. Views use explicit `include` lists,
+// never `include *` (charter A2a).
+
+model {
+  rusUser = actor 'User' {
+    description 'Creates short links (POST /links) and follows them (GET /{code} → 302).'
+  }
+
+  rusSys = system 'URL Shortener' {
+    description 'Read-heavy (~100:1) redirect service; correctness hinges on unique code generation.'
+
+    rusApi = service 'API service' {
+      description 'Stateless create + redirect endpoints. Scales horizontally; no coordination on the read path.'
+      technology 'Python · FastAPI'
+      icon tech:python
+
+      rusCodeLinkCreator = code 'LinkCreator' {
+        description 'POST /links: validates the long URL, takes the next id from the leased range, encodes it, inserts the row.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/01-url-shortener/domain/link_creator.py
+      }
+      rusCodeBase62Codec = code 'Base62Codec' {
+        description 'Pure function pair: counter id ↔ short code. No I/O — trivially testable.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/01-url-shortener/domain/base62_codec.py
+      }
+      rusCodeRangeLease = code 'RangeLease' {
+        description 'Leases disjoint counter ranges from the allocator (batched fetch-and-add) and serves ids locally; refreshes before exhaustion. Crash ⇒ gaps, never duplicates.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/01-url-shortener/domain/range_lease.py
+      }
+      rusCodeRedirectHandler = code 'RedirectHandler' {
+        description 'GET /{code}: cache → store fallback → 302. Emits the click event fire-and-forget.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/01-url-shortener/domain/redirect_handler.py
+      }
+
+      rusCodeLinkCreator -> rusCodeRangeLease 'next id'
+      rusCodeLinkCreator -> rusCodeBase62Codec 'encode(id)'
+    }
+    rusCache = cache 'Redirect cache' {
+      description 'Redis: hot code → long-URL entries. Absorbs the read skew; the miss path falls through to the store.'
+      technology 'Redis'
+    }
+    rusDb = relationalDatabase 'Link store' {
+      description 'Postgres: code → URL rows, unique index on code. System of record.'
+      technology 'PostgreSQL'
+    }
+    rusRange = relationalDatabase 'ID range allocator' {
+      description 'Hands out disjoint counter ranges (single fetch-and-add row) — unique codes without a per-write global counter.'
+      technology 'PostgreSQL (sequence table)'
+    }
+    rusClicks = eventStream 'Click stream' {
+      description 'Queue feeding the analytics pipeline. Async: a redirect never waits on a click write.'
+      technology 'Redis Stream'
+      icon tech:redis
+    }
+
+    rusApi -> rusCache 'GET code (hit path, ~µs–ms)'
+    rusApi -> rusDb 'miss path reads · new-link writes'
+    rusApi -> rusRange 'lease code range (rare, amortized)'
+    rusApi -> rusClicks 'click event (fire-and-forget)'
+
+    rusCodeRedirectHandler -> rusCache 'lookup'
+    rusCodeRedirectHandler -> rusClicks 'click event'
+    rusCodeRangeLease -> rusRange 'lease [from, to)'
+    rusCodeLinkCreator -> rusDb 'INSERT link'
+  }
+
+  rusUser -> rusSys 'HTTPS: create links, follow short codes'
+}
+
+views {
+  view sdfp_urlshortener_container of rusSys {
+    title 'URL shortener — container view (final architecture)'
+    include rusUser, rusSys, rusApi, rusCache, rusDb, rusRange, rusClicks
+  }
+
+  view sdfp_urlshortener_code of rusApi {
+    title 'URL shortener — code level (inside the API service)'
+    include rusApi, rusCodeLinkCreator, rusCodeBase62Codec, rusCodeRangeLease, rusCodeRedirectHandler,
+      rusCache, rusDb, rusRange, rusClicks
+  }
+}

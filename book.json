@@ -1,0 +1,14 @@
+{
+    "title": "System Design from First Principles",
+    "description": "A definitive system-design book that ramps from beginner to expert: DDIA-grade theory on an interview-ready spine, plus the production engineering behind real systems. 66 lessons across nine modules — foundations, data & distributed systems, infrastructure building blocks, patterns, fourteen end-to-end case studies with clickable C4 architecture (closing with a capstone: the platform serving the book itself), production operations, and an interview playbook. Every claim sourced, every diagram rendered.",
+    "tags": [
+        "system-design",
+        "distributed-systems",
+        "architecture",
+        "interview-prep",
+        "production-engineering"
+    ],
+    "estimatedReadingMinutes": 1450,
+    "order": 2,
+    "slug": "system-design-from-first-principles"
+}

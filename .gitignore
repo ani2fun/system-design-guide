@@ -1,0 +1,43 @@
+# Adapted / commercial study material must never reach a published tree. The Synapse walker
+# also excludes these names by construction (ADR-RS002), so the protection does not rest on git
+# alone — but keeping them uncommitted is the first line.
+local-only-content/
+local-only/
+
+.DS_Store
+
+# ── _proof-of-concepts/ build output ─────────────────────────────────────────
+# The runnable proofs are 397 source files; running them locally produces roughly 1.6 GB of
+# virtualenvs, images and caches. The source is worth committing and none of the rest is.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# uv.lock IS committed, deliberately: the proofs are only convincing if they reproduce.
+node_modules/
+dist/
+build/
+target/
+out/
+*.class
+*.log
+
+# Editor state is local; the shared Python-resolution settings are not.
+.vscode/*
+!.vscode/settings.json
+
+# ── Agent / authoring material — local only, never committed ─────────────────
+# CLAUDE.md and AGENTS.md are safe at the root: the walker drops them by name (REPO_FURNITURE).
+# _docs/ needs its underscore — the repo root IS the book, so a plain docs/ would render every
+# file in it as a phantom lesson.
+CLAUDE.md
+AGENTS.md
+_docs/
+.idea/

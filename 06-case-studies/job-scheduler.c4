@@ -1,0 +1,117 @@
+// system-design-from-first-principles · case study 13 — "Design a Distributed Job Scheduler".
+// Container level: a job service materializes executions into a time-bucketed store; a
+// leader-elected, fenced scheduler tick polls the due window and enqueues executions into a
+// delay queue; a worker fleet claims each execution idempotently, heartbeats while running, and
+// quarantines poison jobs to a DLQ. Code level (C4 L4): the scheduler's election/poll/dispatch
+// classes AND the worker's claim/heartbeat classes — two decisive containers, mirrored by the
+// POC at ./examples/job-scheduler/ (deferred to the POC phase — `link`s are the contract).
+// Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rjs` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rjsOwner = actor 'Job owner' {
+    description 'Registers one-off and recurring jobs via the API; expects them to fire on time, once.'
+  }
+
+  rjsSys = system 'Distributed Job Scheduler' {
+    description 'Cron at cluster scale: run within seconds of due, never miss, never double-fire, survive every component dying.'
+
+    rjsGw = apiGateway 'API gateway' {
+      description 'Fronts the job-management API; routes registration and status calls.'
+      technology 'Gateway'
+    }
+    rjsJobSvc = service 'Job service' {
+      description 'Validates schedules and materializes upcoming executions into time buckets; fast-paths imminent jobs straight to the queue.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+    rjsDb = wideColumnStore 'Jobs & executions DB' {
+      description 'Jobs by job_id; Executions by hour bucket (+ user GSI). The range-read the scheduler polls; the row the worker claims.'
+      technology 'DynamoDB / Cassandra'
+    }
+    rjsCoord = coordinationService 'Coordination service' {
+      description 'Leader lease + monotonic epoch/fencing token — the single source of "who is the scheduler right now".'
+      technology 'ZooKeeper / etcd'
+    }
+    rjsScheduler = scheduler 'Scheduler tick' {
+      description 'The elected, fenced heartbeat of the system: hold the lease, poll the due window, enqueue with per-execution delay.'
+      technology 'Python worker'
+      icon tech:python
+
+      rjsCodeLeaderLease = code 'LeaderLease' {
+        description 'Holds the coordination lease and carries its epoch as a fencing token; a paused ex-leader that wakes finds its epoch stale and is rejected downstream — the double-fire guard.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/scheduler/leader_lease.py
+      }
+      rjsCodeWindowPoller = code 'WindowPoller' {
+        description 'Range-reads the current hour bucket for PENDING executions due within the next window — bounded work per tick, not a full-table scan.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/scheduler/window_poller.py
+      }
+      rjsCodeDispatcher = code 'Dispatcher' {
+        description 'Enqueues each due execution with delay = due − now and the current fencing epoch; the queue, not a busy-wait, holds the countdown.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/scheduler/dispatcher.py
+      }
+
+      rjsCodeLeaderLease -> rjsCodeWindowPoller 'tick only while leader'
+      rjsCodeWindowPoller -> rjsCodeDispatcher 'due executions'
+    }
+    rjsQueue = messageQueue 'Delay queue' {
+      description 'Per-message delay + visibility timeout + DLQ: holds the countdown to due time and redelivers if a worker goes silent.'
+      technology 'SQS-style queue'
+    }
+    rjsWorkers = worker 'Worker fleet' {
+      description 'Claim an execution idempotently, heartbeat while running, execute, mark done — and let poison jobs fall to the DLQ.'
+      technology 'Python workers (containers)'
+      icon tech:python
+
+      rjsCodeExecutionClaimer = code 'ExecutionClaimer' {
+        description 'Conditional claim PENDING → RUNNING keyed by execution_id and fencing epoch — at-least-once delivery becomes effectively-once execution; a stale-epoch or already-claimed row is a no-op.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/worker/execution_claimer.py
+      }
+      rjsCodeHeartbeat = code 'Heartbeat' {
+        description 'Extends the visibility timeout while the job runs; stop heartbeating (crash) and the queue redelivers to a healthy worker — the liveness signal that turns a dead worker into a retry.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/worker/heartbeat.py
+      }
+
+      rjsCodeExecutionClaimer -> rjsCodeHeartbeat 'claimed → keep alive'
+    }
+    rjsDlq = messageQueue 'Dead-letter queue' {
+      description 'Poison-job quarantine after max delivery attempts — one bad job never blocks the pipeline.'
+      technology 'DLQ'
+    }
+
+    rjsGw -> rjsJobSvc 'register / query jobs'
+    rjsJobSvc -> rjsDb 'write Job + first Execution'
+    rjsJobSvc -> rjsQueue 'fast path: due < window'
+    rjsScheduler -> rjsCoord 'renew lease (epoch n)'
+    rjsScheduler -> rjsDb 'range-read due bucket'
+    rjsScheduler -> rjsQueue 'enqueue execution_id (+ delay, epoch)'
+    rjsQueue -> rjsWorkers 'deliver at due (visibility timeout)'
+    rjsWorkers -> rjsDb 'conditional claim → RUNNING → COMPLETED'
+    rjsQueue -> rjsDlq 'after max receives'
+
+    rjsCodeLeaderLease -> rjsCoord 'renew / read epoch'
+    rjsCodeWindowPoller -> rjsDb 'range-read PENDING'
+    rjsCodeDispatcher -> rjsQueue 'enqueue with delay'
+    rjsCodeExecutionClaimer -> rjsDb 'conditional claim'
+    rjsCodeHeartbeat -> rjsQueue 'extend visibility'
+  }
+
+  rjsOwner -> rjsSys 'register jobs · check status'
+}
+
+views {
+  view sdfp_jobscheduler_container of rjsSys {
+    title 'Job scheduler — container view (final architecture)'
+    include rjsOwner, rjsSys, rjsGw, rjsJobSvc, rjsDb, rjsCoord, rjsScheduler, rjsQueue, rjsWorkers, rjsDlq
+  }
+
+  view sdfp_jobscheduler_code {
+    title 'Job scheduler — code level (elected scheduler + idempotent worker)'
+    include rjsScheduler, rjsWorkers,
+      rjsCodeLeaderLease, rjsCodeWindowPoller, rjsCodeDispatcher,
+      rjsCodeExecutionClaimer, rjsCodeHeartbeat,
+      rjsCoord, rjsDb, rjsQueue
+  }
+}

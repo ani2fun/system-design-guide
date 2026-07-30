@@ -1,0 +1,30 @@
+[project]
+name = "poc-ticketmaster"
+version = "0.0.0"
+description = "Ticketmaster POC — system-design-from-first-principles case study 02"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.32.1",
+    "asyncpg==0.30.0",
+    "redis==5.2.1",
+]
+
+# Not an installable library — just an application whose deps uv manages.
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["mypy==1.13.0"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_redundant_casts = true
+# Strict-type the production layers; tests are verified by running them.
+files = ["domain", "infra", "app"]
+
+# asyncpg ships no complete type information; trust our own annotations at the seam.
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]
+ignore_missing_imports = true

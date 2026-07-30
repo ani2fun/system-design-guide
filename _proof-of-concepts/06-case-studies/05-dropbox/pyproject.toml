@@ -1,0 +1,27 @@
+[project]
+name = "poc-dropbox"
+version = "0.0.0"
+description = "Dropbox POC — system-design-from-first-principles case study 05"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.32.1",
+    "asyncpg==0.30.0",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["mypy==1.13.0"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_redundant_casts = true
+# agent (device domain) + client (its HTTP adapter) + server (the file service)
+files = ["agent", "client", "server"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]
+ignore_missing_imports = true

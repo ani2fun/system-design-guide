@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# dropbox POC launcher. File service + Postgres (agent runs on host). Ports 8360–8361.
+#   ./run [up]   free ports, build, start, wait healthy
+#   ./run stop   tear down
+#   ./run check  mypy --strict
+#   ./run test   mypy + pure agent unit tests + HTTP two-device sync smoke
+#   ./run logs   follow logs
+set -euo pipefail
+cd "$(dirname "$0")"
+PORTS=(8360 8361)
+
+free_ports() {
+  for p in "${PORTS[@]}"; do
+    local pids; pids=$(lsof -ti "tcp:${p}" 2>/dev/null || true)
+    [ -n "$pids" ] && { echo "  freeing port $p (kill $pids)"; kill -9 $pids 2>/dev/null || true; } || true
+  done
+}
+
+case "${1:-up}" in
+  up|"")
+    echo "▶ dropbox POC: clearing previous run + squatters on ${PORTS[*]}"
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    free_ports
+    docker compose up -d --build --wait
+    echo
+    echo "✅ up. file-service http://localhost:8360  ·  Postgres localhost:8361 (dbx/dbx)"
+    echo "   ./run test    # content-addressed dedup + delta sync over HTTP"
+    ;;
+  stop|down)
+    docker compose down --remove-orphans ;;
+  check)
+    echo "▶ static type check (mypy --strict)"; uv run --quiet mypy ;;
+  test)
+    echo "▶ static type check (mypy --strict)"; uv run --quiet mypy
+    echo "▶ agent unit tests (pure)"; uv run --quiet python tests/test_agent.py
+    docker compose up -d --build --wait
+    echo "▶ two-device sync smoke (HTTP)"; uv run --quiet python tests/smoke.py ;;
+  logs)
+    docker compose logs -f --tail=100 ;;
+  *)
+    echo "usage: ./run [up|stop|check|test|logs]" >&2; exit 1 ;;
+esac

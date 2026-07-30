@@ -1,0 +1,52 @@
+name: validate
+
+# The book has to render before it is merged. This runs the SERVER'S walker, so the gate and the
+# site agree by construction rather than by review.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: book
+      - uses: actions/checkout@v4
+        with:
+          repository: ani2fun/synapse
+          path: synapse
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: synapse
+      - name: validate-book
+        working-directory: synapse
+        run: ./dev-tools/validate-book ../book
+
+  # The /c4 viewer is ONE merged workspace built in the spine repository, so a diagram changed
+  # HERE still has to rebuild it there. Skipped when the token is absent — the spine also rebuilds
+  # nightly, which bounds the staleness to a day rather than forever.
+  rebuild-diagrams:
+    needs: validate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: changed
+        run: |
+          if git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" | grep -q '\.c4$'; then
+            echo "c4=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: dispatch the merged workspace rebuild
+        if: steps.changed.outputs.c4 == 'true' && env.TOKEN != ''
+        env:
+          TOKEN: ${{ secrets.SPINE_DISPATCH_TOKEN }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/ani2fun/synapse-content/dispatches \
+            -d '{"event_type":"c4-changed"}'

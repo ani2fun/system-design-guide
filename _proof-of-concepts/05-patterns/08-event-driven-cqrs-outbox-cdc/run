@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# transactional-outbox POC launcher. Postgres in Docker (port 8451); relay + broker on the host.
+#   ./run [up]   start Postgres, wait healthy, run the walkthrough
+#   ./run demo   run the walkthrough (Postgres must be up)
+#   ./run check  mypy --strict
+#   ./run test   mypy + smoke (atomicity + at-least-once + effectively-once)
+#   ./run stop   tear down
+set -euo pipefail
+cd "$(dirname "$0")"
+PORTS=(8451)
+
+free_ports() {
+  for p in "${PORTS[@]}"; do
+    local pids; pids=$(lsof -ti "tcp:${p}" 2>/dev/null || true)
+    [ -n "$pids" ] && { echo "  freeing port $p (kill $pids)"; kill -9 $pids 2>/dev/null || true; } || true
+  done
+}
+
+case "${1:-up}" in
+  up|"")
+    echo "▶ outbox POC: starting Postgres on ${PORTS[*]}"
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    free_ports
+    docker compose up -d --wait
+    echo "▶ running the walkthrough"
+    uv run --quiet python -m app.demo
+    echo
+    echo "Postgres still up on localhost:8451 (outbox/outbox). ./run stop to tear down."
+    ;;
+  demo)
+    uv run --quiet python -m app.demo ;;
+  check)
+    echo "▶ static type check (mypy --strict)"; uv run --quiet mypy ;;
+  test)
+    docker compose up -d --wait
+    echo "▶ static type check (mypy --strict)"; uv run --quiet mypy
+    echo "▶ smoke (atomicity + delivery guarantees)"; uv run --quiet python tests/smoke.py ;;
+  stop|down)
+    docker compose down --remove-orphans ;;
+  logs)
+    docker compose logs -f --tail=100 ;;
+  *)
+    echo "usage: ./run [up|demo|check|test|stop|logs]" >&2; exit 1 ;;
+esac

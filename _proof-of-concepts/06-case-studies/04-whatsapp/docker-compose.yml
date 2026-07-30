@@ -1,0 +1,43 @@
+# WhatsApp POC — one Redis, TWO chat servers (to demo cross-server delivery).
+# Port block 8351–8353.
+name: poc-whatsapp
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["8353:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  chat1:
+    build: .
+    image: poc-whatsapp:latest
+    environment:
+      SERVER_ID: chat1
+      REDIS_URL: redis://redis:6379/0
+    ports: ["8351:8000"]
+    depends_on:
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  chat2:
+    image: poc-whatsapp:latest
+    environment:
+      SERVER_ID: chat2
+      REDIS_URL: redis://redis:6379/0
+    ports: ["8352:8000"]
+    depends_on:
+      redis: {condition: service_healthy}
+      chat1: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30

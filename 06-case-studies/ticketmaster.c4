@@ -1,0 +1,97 @@
+// system-design-from-first-principles · case study 02 — "Design Ticketmaster".
+// Container level: admission control at the edge (virtual waiting room), a cached browse/search
+// path, and a booking path whose no-double-booking invariant lives in TTL seat holds + a
+// transactional orders store. Code level (C4 L4): the three classes inside the booking service,
+// mirrored 1:1 by the POC at _proof-of-concepts/06-case-studies/02-ticketmaster/ (each element links to its source file).
+// Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rtm` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rtmFan = actor 'Fan' {
+    description 'Browses events, joins on-sales, books seats.'
+  }
+
+  rtmPay = externalSystem 'Payment provider' {
+    description 'External PSP. Charges the card during checkout; webhooks confirm asynchronously.'
+  }
+
+  rtmSys = system 'Ticketing Platform' {
+    description 'Contention is the product: N fans, 1 seat. The invariant — never sell a seat twice — decides the design.'
+
+    rtmGate = apiGateway 'API gateway + waiting room' {
+      description 'Admission control. During an on-sale, fans queue here; a controlled trickle reaches the booking path.'
+      technology 'Gateway + queue'
+    }
+    rtmBrowse = service 'Browse & search service' {
+      description 'Event pages and search. Read-heavy; serves from cache and the search index.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+    rtmSearch = searchIndex 'Search index' {
+      description 'Inverted index over events/venues/dates for query-shaped reads.'
+      technology 'Postgres FTS (POC) / Elasticsearch'
+    }
+    rtmCache = cache 'Event & seat-map cache' {
+      description 'Redis: event pages + seat maps, deliberately allowed to be seconds-stale outside checkout.'
+      technology 'Redis'
+    }
+    rtmBooking = service 'Booking service' {
+      description 'The critical section: acquire a seat hold, take payment, confirm the order.'
+      technology 'Python · FastAPI'
+      icon tech:python
+
+      rtmCodeSeatHoldService = code 'SeatHoldService' {
+        description 'Acquires/releases per-seat TTL holds (SET NX PX). The hold is the checkout\'s admission ticket; expiry releases crashed checkouts automatically.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/02-ticketmaster/domain/seat_hold_service.py
+      }
+      rtmCodeBookingConfirmer = code 'BookingConfirmer' {
+        description 'The critical section: transactional confirm with row locks (SELECT … FOR UPDATE) — re-verifies the hold, marks seats sold, writes the order. The final arbiter against double-sells.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/02-ticketmaster/domain/booking_confirmer.py
+      }
+      rtmCodePaymentClient = code 'PaymentClient' {
+        description 'Authorize/capture against the PSP (stubbed in the POC). One idempotency key per checkout attempt.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/02-ticketmaster/domain/payment_client.py
+      }
+
+      rtmCodeBookingConfirmer -> rtmCodeSeatHoldService 'verify hold before confirm'
+      rtmCodeBookingConfirmer -> rtmCodePaymentClient 'capture on success'
+    }
+    rtmHolds = cache 'Seat-hold store' {
+      description 'Redis TTL holds: seat → holder with automatic expiry.'
+      technology 'Redis'
+    }
+    rtmOrders = relationalDatabase 'Orders DB' {
+      description 'Postgres, system of record. Confirmation is a transaction with explicit locking.'
+      technology 'PostgreSQL'
+    }
+
+    rtmGate -> rtmBrowse 'browse & search traffic'
+    rtmGate -> rtmBooking 'admitted checkout traffic'
+    rtmBrowse -> rtmCache 'event pages, seat maps'
+    rtmBrowse -> rtmSearch 'queries'
+    rtmBooking -> rtmHolds 'acquire / release seat hold (TTL)'
+    rtmBooking -> rtmOrders 'confirm booking (transactional write)'
+
+    rtmCodeSeatHoldService -> rtmHolds 'SET NX PX / DEL'
+    rtmCodeBookingConfirmer -> rtmOrders 'BEGIN … COMMIT'
+  }
+
+  rtmFan -> rtmSys 'HTTPS: browse, queue, book'
+  rtmBooking -> rtmPay 'authorize & capture payment'
+  rtmCodePaymentClient -> rtmPay 'PSP API'
+}
+
+views {
+  view sdfp_ticketmaster_container of rtmSys {
+    title 'Ticketmaster — container view (final architecture)'
+    include rtmFan, rtmSys, rtmGate, rtmBrowse, rtmSearch, rtmCache, rtmBooking, rtmHolds, rtmOrders, rtmPay
+  }
+
+  view sdfp_ticketmaster_code of rtmBooking {
+    title 'Ticketmaster — code level (inside the booking service)'
+    include rtmBooking, rtmCodeSeatHoldService, rtmCodeBookingConfirmer, rtmCodePaymentClient,
+      rtmHolds, rtmOrders, rtmPay
+  }
+}

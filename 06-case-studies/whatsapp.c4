@@ -1,0 +1,84 @@
+// system-design-from-first-principles · case study 04 — "Design WhatsApp".
+// Container level: an L4 balancer pinning persistent WebSockets to chat servers, a pub/sub bus
+// routing messages across servers, a per-user inbox store for offline delivery, and a media
+// store holding opaque (end-to-end-encrypted) blobs. Code level (C4 L4): the three classes
+// inside the chat server, to be mirrored 1:1 by the POC at _proof-of-concepts/06-case-studies/04-whatsapp/ (deferred to
+// the project's POC phase — `link`s point at the contracted paths). Click-docs live in
+// ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rwa` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rwaUser = actor 'User' {
+    description 'Sends and receives messages over a persistent connection; may be offline for days.'
+  }
+
+  rwaSys = system 'WhatsApp' {
+    description 'Realtime messaging: bidirectional delivery, offline inboxes, receipts — at billions of persistent connections.'
+
+    rwaLb = loadBalancer 'L4 load balancer' {
+      description 'TCP pass-through so a WebSocket, once established, stays pinned to its chat server.'
+      technology 'L4 / TCP'
+    }
+    rwaChat = service 'Chat servers' {
+      description 'Terminate persistent WebSockets; route each message to the recipient\'s socket, wherever it lives.'
+      technology 'Python · WebSockets'
+      icon tech:python
+
+      rwaCodeConnectionRegistry = code 'ConnectionRegistry' {
+        description 'The routing table: which user\'s socket lives on which chat server right now. Updated on connect/disconnect; the lookup every delivery starts with.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/04-whatsapp/domain/connection_registry.py
+      }
+      rwaCodeMessageRouter = code 'MessageRouter' {
+        description 'Writes every message to the inbox first (deleted on delivery ack), then delivers: local socket if the recipient is here, publish to their channel otherwise — the inbox row is simply the copy that survives when nobody holds a socket. At-least-once — the client dedups by message id.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/04-whatsapp/domain/message_router.py
+      }
+      rwaCodeReceiptTracker = code 'ReceiptTracker' {
+        description 'Drives the sent → delivered → read ladder; receipts are just tiny messages flowing the other way.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/04-whatsapp/domain/receipt_tracker.py
+      }
+
+      rwaCodeMessageRouter -> rwaCodeConnectionRegistry 'where is the recipient?'
+      rwaCodeReceiptTracker -> rwaCodeMessageRouter 'receipt = reverse message'
+    }
+    rwaPubsub = eventBus 'Pub/sub bus' {
+      description 'Cross-server delivery: publish to the recipient\'s channel; whichever chat server holds the socket is subscribed.'
+      technology 'Redis pub/sub'
+      icon tech:redis
+    }
+    rwaInbox = wideColumnStore 'Inbox store' {
+      description 'Per-user offline queue: undelivered messages wait here and drain on reconnect; deleted after delivery ack.'
+      technology 'Wide-column store'
+    }
+    rwaBlob = objectStorage 'Media store' {
+      description 'Opaque encrypted media blobs via presigned upload/download — the servers never see plaintext.'
+      technology 'Object storage'
+      icon aws:simple-storage-service
+    }
+
+    rwaLb -> rwaChat 'pinned WebSocket traffic'
+    rwaChat -> rwaPubsub 'publish to recipient channel'
+    rwaPubsub -> rwaChat 'deliver to the socket holder'
+    rwaChat -> rwaInbox 'write-then-delete-on-ack · drain on reconnect'
+
+    rwaCodeMessageRouter -> rwaPubsub 'publish(recipient)'
+    rwaCodeMessageRouter -> rwaInbox 'write first (delete on ack)'
+  }
+
+  rwaUser -> rwaSys 'WebSocket: send, receive, receipts'
+  rwaUser -> rwaBlob 'presigned media upload / download'
+}
+
+views {
+  view sdfp_whatsapp_container of rwaSys {
+    title 'WhatsApp — container view (final architecture)'
+    include rwaUser, rwaSys, rwaLb, rwaChat, rwaPubsub, rwaInbox, rwaBlob
+  }
+
+  view sdfp_whatsapp_code of rwaChat {
+    title 'WhatsApp — code level (inside a chat server)'
+    include rwaChat, rwaCodeConnectionRegistry, rwaCodeMessageRouter, rwaCodeReceiptTracker,
+      rwaPubsub, rwaInbox
+  }
+}

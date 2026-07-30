@@ -1,0 +1,30 @@
+# Dropbox POC — file service + Postgres. Port block 8360–8361.
+# The sync agent runs on the host (tests); the service holds chunks + manifests.
+name: poc-dropbox
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dbx
+      POSTGRES_PASSWORD: dbx
+      POSTGRES_DB: dbx
+    ports: ["8361:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbx -d dbx"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  file-service:
+    build: .
+    environment:
+      PG_DSN: postgres://dbx:dbx@db:5432/dbx
+    ports: ["8360:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30

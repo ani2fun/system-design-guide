@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# isolation-anomalies POC launcher. Postgres in Docker (port 8441); harness on the host.
+#   ./run [up]   start Postgres, wait healthy, run the experiments
+#   ./run demo   run the experiments (Postgres must be up)
+#   ./run check  mypy --strict
+#   ./run test   mypy + smoke (asserts each anomaly + its fix)
+#   ./run stop   tear down
+set -euo pipefail
+cd "$(dirname "$0")"
+PORTS=(8441)
+
+free_ports() {
+  for p in "${PORTS[@]}"; do
+    local pids; pids=$(lsof -ti "tcp:${p}" 2>/dev/null || true)
+    [ -n "$pids" ] && { echo "  freeing port $p (kill $pids)"; kill -9 $pids 2>/dev/null || true; } || true
+  done
+}
+
+case "${1:-up}" in
+  up|"")
+    echo "▶ isolation POC: starting Postgres on ${PORTS[*]}"
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    free_ports
+    docker compose up -d --wait
+    echo "▶ running the experiments"
+    uv run --quiet python -m app.demo
+    echo
+    echo "Postgres still up on localhost:8441 (iso/iso). ./run stop to tear down."
+    ;;
+  demo)
+    uv run --quiet python -m app.demo ;;
+  check)
+    echo "▶ static type check (mypy --strict)"; uv run --quiet mypy ;;
+  test)
+    docker compose up -d --wait
+    echo "▶ static type check (mypy --strict)"; uv run --quiet mypy
+    echo "▶ smoke (anomaly + fix assertions)"; uv run --quiet python tests/smoke.py ;;
+  stop|down)
+    docker compose down --remove-orphans ;;
+  logs)
+    docker compose logs -f --tail=100 ;;
+  *)
+    echo "usage: ./run [up|demo|check|test|stop|logs]" >&2; exit 1 ;;
+esac

@@ -1,0 +1,41 @@
+# Ticketmaster POC — port block 8320–8322 (never collides with the synapse stack).
+name: poc-ticketmaster
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ticket
+      POSTGRES_PASSWORD: ticket
+      POSTGRES_DB: ticket
+    ports: ["8321:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ticket -d ticket"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports: ["8322:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    environment:
+      PG_DSN: postgres://ticket:ticket@db:5432/ticket
+      REDIS_URL: redis://redis:6379/0
+      SEAT_COUNT: "50"
+    ports: ["8320:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30

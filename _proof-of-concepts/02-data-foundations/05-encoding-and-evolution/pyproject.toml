@@ -1,0 +1,18 @@
+[project]
+name = "poc-encoding-and-evolution"
+version = "0.0.0"
+description = "Schema-evolution POC — system-design-from-first-principles data-foundations/encoding-and-evolution"
+requires-python = ">=3.12"
+dependencies = []  # pure standard library
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["mypy==1.13.0"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_redundant_casts = true
+files = ["domain", "infra", "app"]

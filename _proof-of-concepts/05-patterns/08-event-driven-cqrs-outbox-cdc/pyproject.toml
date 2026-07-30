@@ -1,0 +1,24 @@
+[project]
+name = "poc-transactional-outbox"
+version = "0.0.0"
+description = "Transactional outbox + relay POC — system-design-from-first-principles patterns/event-driven-cqrs-outbox-cdc"
+requires-python = ">=3.12"
+dependencies = [
+    "asyncpg==0.30.0",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["mypy==1.13.0"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_redundant_casts = true
+files = ["domain", "infra", "app"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true

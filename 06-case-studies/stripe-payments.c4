@@ -1,0 +1,93 @@
+// system-design-from-first-principles · case study 12 — "Design a Payment System".
+// Container level: an idempotency-guarded payment API drives the PaymentIntent state machine,
+// every money movement lands as append-only double-entry ledger postings, the PSP's webhooks
+// deliver the truth late (pending states are first-class), and a reconciliation job compares
+// our ledger against PSP reports — money may be slow, never wrong. Code level (C4 L4): the
+// three classes inside the payment API, mirrored by the POC at _proof-of-concepts/06-case-studies/12-stripe-payments/
+// (deferred to the POC phase — `link`s are the contract). Click-docs live in
+// ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rsp` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rspMerchant = actor 'Merchant' {
+    description 'Calls the payment API from their backend — and retries whenever anything looks slow.'
+  }
+
+  rspPsp = externalSystem 'PSP / card rails' {
+    description 'External processor, card networks and banks. Answers slowly, asynchronously, and occasionally differently than expected.'
+  }
+
+  rspSys = system 'Payment System' {
+    description 'At-least-once + idempotent as the whole product: never charge twice, never lose money, auditable forever.'
+
+    rspApi = service 'Payment API' {
+      description 'The only write path for money: idempotency check first, then the state machine, then ledger postings — in that order, every time.'
+      technology 'Python · FastAPI'
+      icon tech:python
+
+      rspCodeIdempotencyGuard = code 'IdempotencyGuard' {
+        description 'Same key ⇒ same outcome: stores the result of the first attempt and replays it to retries. The end-to-end duplicate suppressor transactions alone can\'t provide.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/12-stripe-payments/domain/idempotency_guard.py
+      }
+      rspCodePaymentIntentMachine = code 'PaymentIntentMachine' {
+        description 'created → authorized → captured → settled | refunded/disputed — every transition an appended event; illegal transitions are impossible, not discouraged.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/12-stripe-payments/domain/payment_intent_machine.py
+      }
+      rspCodeLedgerWriter = code 'LedgerWriter' {
+        description 'Append-only double-entry postings that always balance. Money is never UPDATEd; balances are derived views over the entries.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/12-stripe-payments/domain/ledger_writer.py
+      }
+
+      rspCodeIdempotencyGuard -> rspCodePaymentIntentMachine 'first attempt only'
+      rspCodePaymentIntentMachine -> rspCodeLedgerWriter 'transition → postings'
+    }
+    rspKeys = relationalDatabase 'Idempotency key store' {
+      description 'key → (request fingerprint, stored result). The memory that makes retries safe.'
+      technology 'PostgreSQL'
+    }
+    rspIntents = relationalDatabase 'Payment intents DB' {
+      description 'The state machine\'s event log per payment; current state is a fold of its events.'
+      technology 'PostgreSQL'
+    }
+    rspLedger = relationalDatabase 'Ledger' {
+      description 'Append-only double-entry postings — the financial source of truth auditors read.'
+      technology 'PostgreSQL (append-only)'
+    }
+    rspWebhooks = service 'Webhook receiver' {
+      description 'The PSP\'s truth arriving late: verifies signatures, flips pending intents, posts settlement entries. Idempotent — webhooks re-deliver too.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+    rspRecon = batchJob 'Reconciliation job' {
+      description 'Trust, but verify: compares our ledger against PSP settlement reports and surfaces every break instead of absorbing it.'
+      technology 'Batch job'
+    }
+
+    rspApi -> rspKeys 'check / store idempotency key'
+    rspApi -> rspIntents 'append state events'
+    rspApi -> rspLedger 'append postings'
+    rspWebhooks -> rspIntents 'flip pending states'
+    rspWebhooks -> rspLedger 'settlement postings'
+    rspRecon -> rspLedger 'our numbers'
+  }
+
+  rspMerchant -> rspSys 'charge (with idempotency key) · query status'
+  rspApi -> rspPsp 'authorize · capture'
+  rspPsp -> rspWebhooks 'async events (signed)'
+  rspRecon -> rspPsp 'settlement reports'
+}
+
+views {
+  view sdfp_payments_container of rspSys {
+    title 'Payment system — container view (final architecture)'
+    include rspMerchant, rspSys, rspApi, rspKeys, rspIntents, rspLedger, rspWebhooks, rspRecon, rspPsp
+  }
+
+  view sdfp_payments_code of rspApi {
+    title 'Payment system — code level (inside the payment API)'
+    include rspApi, rspCodeIdempotencyGuard, rspCodePaymentIntentMachine, rspCodeLedgerWriter,
+      rspKeys, rspIntents, rspLedger, rspPsp
+  }
+}

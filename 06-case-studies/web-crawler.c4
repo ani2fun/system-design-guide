@@ -1,0 +1,95 @@
+// system-design-from-first-principles · case study 08 — "Design a Web Crawler".
+// Container level: a domain-sharded URL frontier feeding a fetcher fleet with per-host
+// politeness; a parse/extract stage storing pages and feeding discovered URLs back through
+// dedup; retries and poison pages drain to a DLQ. Code level (C4 L4): the three classes inside
+// the frontier, mirrored by the POC at _proof-of-concepts/06-case-studies/08-web-crawler/ (deferred to the POC phase —
+// `link`s are the contract). Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rwc` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rwcOperator = actor 'Operator' {
+    description 'Seeds the crawl, sets the time budget and politeness policy, watches the dashboards.'
+  }
+
+  rwcWeb = externalSystem 'The Web' {
+    description 'Billions of external hosts — slow, hostile, full of traps. Not ours.'
+  }
+
+  rwcSys = system 'Web Crawler' {
+    description 'Billions of pages against a hard time budget, without hammering any single host.'
+
+    rwcFrontier = messageQueue 'URL frontier' {
+      description 'More than a queue: domain-sharded scheduling, per-host politeness, priorities — the crawl\'s brain.'
+      technology 'Queue + Redis state'
+      icon tech:redis
+
+      rwcCodeFrontierScheduler = code 'FrontierScheduler' {
+        description 'Decides which URL a fetcher gets next: rotates domains so no host starves the budget and no fetcher hammers one site.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/08-web-crawler/domain/frontier_scheduler.py
+      }
+      rwcCodePolitenessGate = code 'PolitenessGate' {
+        description 'robots.txt rules + per-host rate limits. A URL only leaves the frontier when its host\'s gate opens.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/08-web-crawler/domain/politeness_gate.py
+      }
+      rwcCodeUrlDeduper = code 'UrlDeduper' {
+        description 'Normalizes URLs and drops the already-seen — the loop-breaker that keeps the frontier from re-crawling the web into itself.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/08-web-crawler/domain/url_deduper.py
+      }
+
+      rwcCodeFrontierScheduler -> rwcCodePolitenessGate 'may I fetch this host?'
+      rwcCodeUrlDeduper -> rwcCodeFrontierScheduler 'fresh URLs only'
+    }
+    rwcFetchers = worker 'Fetcher fleet' {
+      description 'Stateless workers: claim a URL (visibility timeout), fetch, ack on success — redelivery covers crashes.'
+      technology 'Python workers'
+      icon tech:python
+    }
+    rwcParser = worker 'Parser / extractor' {
+      description 'Extracts text and links from raw pages; content-hash dedup catches mirrors and boilerplate clones.'
+      technology 'Python workers'
+      icon tech:python
+    }
+    rwcSeen = keyValueDatabase 'Seen stores' {
+      description 'URL-seen set + content hashes — the exact-membership answer the frontier and parser consult.'
+      technology 'Indexed metadata DB / KV'
+    }
+    rwcStore = objectStorage 'Page store' {
+      description 'Raw pages and extracted text, content-addressed; the corpus downstream consumers read.'
+      technology 'S3-style object store'
+      icon aws:simple-storage-service
+    }
+    rwcDlq = messageQueue 'Retry & DLQ' {
+      description 'Backoff retries for transient failures; poison pages land here instead of blocking the pipeline.'
+      technology 'Queue (DLQ)'
+    }
+
+    rwcFrontier -> rwcFetchers 'next URL (politeness-gated)'
+    rwcFetchers -> rwcStore 'checkpoint raw page (ack only after durable)'
+    rwcFetchers -> rwcParser 'page pointer — never the payload'
+    rwcFetchers -> rwcDlq 'repeated failures'
+    rwcParser -> rwcStore 'read raw · store extracted text'
+    rwcParser -> rwcSeen 'content hash check'
+    rwcParser -> rwcFrontier 'discovered URLs'
+    rwcFrontier -> rwcSeen 'URL-seen check'
+
+    rwcCodeUrlDeduper -> rwcSeen 'seen?'
+  }
+
+  rwcOperator -> rwcSys 'seed · budget · policy'
+  rwcFetchers -> rwcWeb 'HTTP GET (rate-limited per host)'
+}
+
+views {
+  view sdfp_webcrawler_container of rwcSys {
+    title 'Web crawler — container view (final architecture)'
+    include rwcOperator, rwcSys, rwcFrontier, rwcFetchers, rwcParser, rwcSeen, rwcStore, rwcDlq, rwcWeb
+  }
+
+  view sdfp_webcrawler_code of rwcFrontier {
+    title 'Web crawler — code level (inside the frontier)'
+    include rwcFrontier, rwcCodeFrontierScheduler, rwcCodePolitenessGate, rwcCodeUrlDeduper,
+      rwcFetchers, rwcSeen
+  }
+}

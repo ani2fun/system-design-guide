@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# url-shortener POC launcher. Owns host ports 8310–8312.
+#   ./run [up]   free ports, (re)build, start, wait healthy, print endpoints
+#   ./run stop   tear everything down
+#   ./run test   run unit + smoke tests
+#   ./run logs   follow logs
+set -euo pipefail
+cd "$(dirname "$0")"
+
+PORTS=(8310 8311 8312)
+API="http://localhost:8310"
+
+free_ports() {
+  for p in "${PORTS[@]}"; do
+    local pids
+    pids=$(lsof -ti "tcp:${p}" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+      echo "  freeing port $p (kill $pids)"
+      kill -9 $pids 2>/dev/null || true
+    fi
+  done
+}
+
+case "${1:-up}" in
+  up|"")
+    echo "▶ url-shortener POC: clearing any previous run + squatters on ${PORTS[*]}"
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    free_ports
+    echo "▶ building + starting (docker compose up -d --build --wait)"
+    docker compose up -d --build --wait
+    echo
+    echo "✅ up."
+    echo "   API       $API        (docs: $API/docs)"
+    echo "   Postgres  localhost:8311  (shortener/shortener)"
+    echo "   Redis     localhost:8312"
+    echo
+    echo "Try it:"
+    echo "   curl -s -XPOST $API/links -H 'content-type: application/json' \\"
+    echo "        -d '{\"url\":\"https://example.com/a/very/long/path\"}'"
+    echo "   curl -si $API/<code>          # 302 to the long URL"
+    echo "   curl -s  $API/stats | python3 -m json.tool   # hit ratio, ranges leased"
+    echo "   ./run test                    # unit + end-to-end smoke"
+    ;;
+  stop|down)
+    docker compose down --remove-orphans
+    ;;
+  check)
+    echo "▶ static type check (mypy --strict)"
+    uv run --quiet mypy
+    ;;
+  test)
+    echo "▶ static type check (mypy --strict)"
+    uv run --quiet mypy
+    echo "▶ unit tests (pure, host)"
+    python3 tests/test_base62_codec.py
+    echo "▶ smoke test (against $API)"
+    python3 tests/smoke.py "$API"
+    ;;
+  logs)
+    docker compose logs -f --tail=100
+    ;;
+  *)
+    echo "usage: ./run [up|stop|check|test|logs]" >&2
+    exit 1
+    ;;
+esac

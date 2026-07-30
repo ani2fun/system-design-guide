@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# whatsapp POC launcher. One Redis + two chat servers. Port block 8351–8353.
+#   ./run [up]   free ports, build, start, wait healthy
+#   ./run stop   tear down
+#   ./run check  mypy --strict
+#   ./run test   mypy + WebSocket smoke (cross-server delivery + offline drain)
+#   ./run logs   follow logs
+set -euo pipefail
+cd "$(dirname "$0")"
+
+PORTS=(8351 8352 8353)
+
+free_ports() {
+  for p in "${PORTS[@]}"; do
+    local pids; pids=$(lsof -ti "tcp:${p}" 2>/dev/null || true)
+    [ -n "$pids" ] && { echo "  freeing port $p (kill $pids)"; kill -9 $pids 2>/dev/null || true; } || true
+  done
+}
+
+case "${1:-up}" in
+  up|"")
+    echo "▶ whatsapp POC: clearing previous run + squatters on ${PORTS[*]}"
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    free_ports
+    echo "▶ building + starting redis + chat1 + chat2"
+    docker compose up -d --build --wait
+    echo
+    echo "✅ up."
+    echo "   chat1  ws://localhost:8351/ws?user_id=alice"
+    echo "   chat2  ws://localhost:8352/ws?user_id=bob"
+    echo "   redis  localhost:8353"
+    echo "   ./run test    # cross-server delivery + offline inbox drain"
+    ;;
+  stop|down)
+    docker compose down --remove-orphans ;;
+  check)
+    echo "▶ static type check (mypy --strict)"; uv run --quiet mypy ;;
+  test)
+    echo "▶ static type check (mypy --strict)"; uv run --quiet mypy
+    echo "▶ WebSocket smoke"; uv run --quiet python tests/smoke.py ;;
+  logs)
+    docker compose logs -f --tail=100 ;;
+  *)
+    echo "usage: ./run [up|stop|check|test|logs]" >&2; exit 1 ;;
+esac

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# load-balancing POC launcher. Pure Python (no Docker, no ports).
+#   ./run [demo]   compare five strategies on tail load
+#   ./run check    mypy --strict
+#   ./run test     mypy + unit tests + demo
+set -euo pipefail
+cd "$(dirname "$0")"
+
+case "${1:-demo}" in
+  demo|"")
+    uv run --quiet python -m app.demo
+    ;;
+  check)
+    echo "▶ static type check (mypy --strict)"
+    uv run --quiet mypy
+    ;;
+  test)
+    echo "▶ static type check (mypy --strict)"
+    uv run --quiet mypy
+    echo "▶ unit tests"
+    uv run --quiet python tests/test_balancing.py
+    echo "▶ demo"
+    uv run --quiet python -m app.demo
+    ;;
+  *)
+    echo "usage: ./run [demo|check|test]" >&2
+    exit 1
+    ;;
+esac

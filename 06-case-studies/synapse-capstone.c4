@@ -1,0 +1,75 @@
+// system-design-from-first-principles · case study 14 — "Capstone: Design Synapse".
+// Container level: the platform serving the book itself. Three traffic classes drive the shape —
+// reads are version-addressed derived data served CDN-first; runs execute untrusted code in an
+// isolated sandbox tier; writes (submissions) are judged asynchronously into one Postgres.
+// Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rsy` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rsyReader = actor 'Reader' {
+    description 'Reads lessons anonymously; signs in to edit code and submit solutions.'
+  }
+  rsyAuthor = actor 'Author' {
+    description 'Publishes by pushing Markdown to the content repository — git push IS the deploy.'
+  }
+
+  rsyContentRepo = sourceRepository 'Content repository' {
+    description 'Books as Markdown in git. One writer, infinitely many readers — the whole consistency story.'
+    technology 'git (GitHub)'
+  }
+
+  rsySys = system 'Synapse' {
+    description 'Interactive learning platform: prose + runnable code + judged submissions. Reads ~99% / runs ~1% / writes «1%.'
+
+    rsyEdge = cdn 'Edge cache' {
+      description 'Immutable-cached page assets; content JSON at max-age=60 + stale-while-revalidate. The read path\'s real capacity.'
+      technology 'Cloudflare'
+    }
+    rsySpa = webApplication 'Web app' {
+      description 'Server-rendered pages with island hydration: prose arrives as HTML; the editor, diagrams and visualiser load as lazy per-feature bundles only where used.'
+      technology 'Astro SSR · TS islands'
+    }
+    rsyApi = service 'Origin API' {
+      description 'Stateless: local JWT verification (cached JWKS), content read model, run gateway, submissions. Any replica serves any request.'
+      technology 'Rust · axum'
+    }
+    rsyContentSync = worker 'Content checkout' {
+      description 'git-sync sidecar pulls the repo; the origin re-reads HEAD SHA per request as contentVersion — caches advance by key, never by purge.'
+      technology 'git-sync sidecar'
+    }
+    rsySandbox = worker 'Code sandbox' {
+      description 'The only place untrusted code runs: namespaces + cgroups, no network, CPU/memory/time/output quotas, warm process pools.'
+      technology 'go-judge'
+    }
+    rsyDb = relationalDatabase 'Submissions store' {
+      description 'Submissions + allowlist grants. The only growing entity; <1 write/s at 1M MAU — partitioned, never sharded.'
+      technology 'PostgreSQL'
+    }
+    rsyIdp = identityProvider 'Identity provider' {
+      description 'OIDC (auth code + PKCE). On the login path only — per-request verification is local crypto at the origin.'
+      technology 'Keycloak'
+    }
+
+    rsyEdge -> rsyApi 'cache fill: content JSON (keyed by contentVersion)'
+    rsySpa -> rsyEdge 'lesson reads (mostly edge-served)'
+    rsySpa -> rsyApi 'POST /run (sync, rate-limited) · POST /submissions (202 + poll)'
+    rsyApi -> rsyContentSync 'read checkout + HEAD SHA'
+    rsyApi -> rsySandbox 'execute run · judge hidden suite (per case)'
+    rsyApi -> rsyDb 'submissions: pending → completed · grants'
+    rsySpa -> rsyIdp 'OIDC sign-in (once per session)'
+  }
+
+  rsyReader -> rsySys 'HTTPS: read, run, submit'
+  rsyAuthor -> rsyContentRepo 'git push (publishing)'
+  rsyContentSync -> rsyContentRepo 'pull (content follows the repo, no redeploy)'
+}
+
+views {
+  view sdfp_synapse_container of rsySys {
+    title 'Synapse — container view (the platform serving this book)'
+    include rsyReader, rsyAuthor, rsyContentRepo, rsySys,
+      rsyEdge, rsySpa, rsyApi, rsyContentSync, rsySandbox, rsyDb, rsyIdp
+  }
+}

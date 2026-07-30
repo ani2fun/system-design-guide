@@ -1,0 +1,104 @@
+// system-design-from-first-principles · case study 07 — "Design Uber".
+// Container level: the driver-location firehose lands in a TTL'd geo index; the matching
+// service queries nearby drivers, takes a TTL lock on exactly one, and walks the offer flow;
+// the trip service owns the ride's state machine. Code level (C4 L4): the three classes inside
+// the matching service, mirrored by the POC at _proof-of-concepts/06-case-studies/07-uber/ (deferred to the POC phase —
+// `link`s are the contract). Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rub` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rubRider = actor 'Rider' {
+    description 'Requests a ride and watches its status live.'
+  }
+  rubDriver = actor 'Driver' {
+    description 'Streams location pings; receives at most one offer at a time.'
+  }
+
+  rubSys = system 'Uber' {
+    description 'Geospatial matching under contention: find nearby drivers fast, offer to exactly one, survive the hot zone.'
+
+    rubGw = apiGateway 'API gateway' {
+      description 'Fronts rider and driver apps; terminates the realtime channels.'
+      technology 'Gateway'
+    }
+    rubLoc = service 'Location service' {
+      description 'Absorbs the ping firehose (millions/min) and writes TTL\'d positions to the geo index — nothing else touches this write path.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+    rubGeo = cache 'Geo index' {
+      description 'Driver positions with TTL freshness (stale drivers evaporate). Radius queries answer "who\'s nearby, right now?".'
+      technology 'Redis GEO'
+    }
+    rubMatch = service 'Matching service' {
+      description 'The contention core: query nearby, lock one driver for the offer window, walk the offer chain until someone accepts.'
+      technology 'Python · FastAPI'
+      icon tech:python
+
+      rubCodeNearbyDriverQuery = code 'NearbyDriverQuery' {
+        description 'Radius query against the geo index + ranking (ETA, rating). Read-only; freshness comes from the index TTLs.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/07-uber/domain/nearby_driver_query.py
+      }
+      rubCodeDriverLock = code 'DriverLock' {
+        description 'SET NX PX per driver — the offer-window lock guaranteeing one offer at a time. TTL expiry, not cleanup code, releases a crashed flow (the Ticketmaster hold, wearing a different hat).'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/07-uber/domain/driver_lock.py
+      }
+      rubCodeOfferFlow = code 'OfferFlow' {
+        description 'Offer → accept | expire → next candidate. Accept is idempotent (retries are safe); the trip is created exactly once per request.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/07-uber/domain/offer_flow.py
+      }
+
+      rubCodeOfferFlow -> rubCodeNearbyDriverQuery 'candidates'
+      rubCodeOfferFlow -> rubCodeDriverLock 'lock before offering'
+    }
+    rubLocks = cache 'Driver locks' {
+      description 'TTL offer locks, one per driver. Advisory: the trip-creation transaction remains the final arbiter.'
+      technology 'Redis (SET NX PX)'
+    }
+    rubTrip = service 'Trip service' {
+      description 'The ride\'s state machine: requested → matched → in-ride → completed, with failure arrows at every step.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+    rubTripDb = relationalDatabase 'Trip DB' {
+      description 'System of record for trips; unique constraint per request backs OfferFlow\'s exactly-once trip creation.'
+      technology 'PostgreSQL'
+    }
+    rubNotify = notificationService 'Notification & live channel' {
+      description 'Offers reach drivers via mobile push (APN/FCM — a driver can\'t hold a socket open all shift); riders watch live status over a persistent connection.'
+      technology 'APN/FCM push + WebSocket'
+    }
+
+    rubGw -> rubLoc 'driver pings'
+    rubLoc -> rubGeo 'TTL\'d position writes'
+    rubGw -> rubMatch 'ride requests'
+    rubMatch -> rubGeo 'nearby-driver queries'
+    rubMatch -> rubLocks 'acquire / release offer lock'
+    rubMatch -> rubNotify 'push offer to driver'
+    rubMatch -> rubTrip 'accepted → create trip'
+    rubTrip -> rubTripDb 'state transitions'
+    rubTrip -> rubNotify 'status to rider'
+
+    rubCodeDriverLock -> rubLocks 'SET NX PX / DEL'
+    rubCodeNearbyDriverQuery -> rubGeo 'GEOSEARCH'
+    rubCodeOfferFlow -> rubTrip 'create trip (idempotent)'
+  }
+
+  rubRider -> rubSys 'request ride · live status'
+  rubDriver -> rubSys 'location pings · offers'
+}
+
+views {
+  view sdfp_uber_container of rubSys {
+    title 'Uber — container view (final architecture)'
+    include rubRider, rubDriver, rubSys, rubGw, rubLoc, rubGeo, rubMatch, rubLocks, rubTrip, rubTripDb, rubNotify
+  }
+
+  view sdfp_uber_code of rubMatch {
+    title 'Uber — code level (inside the matching service)'
+    include rubMatch, rubCodeNearbyDriverQuery, rubCodeDriverLock, rubCodeOfferFlow,
+      rubGeo, rubLocks, rubTrip, rubNotify
+  }
+}

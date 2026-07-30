@@ -1,0 +1,9 @@
+tests/
+agent/
+client/
+README.md
+run
+.dockerignore
+__pycache__/
+*.pyc
+.venv/

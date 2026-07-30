@@ -1,0 +1,96 @@
+// system-design-from-first-principles · case study 03 — "Design a News Feed".
+// Container level: hybrid fan-out — writes fan out to per-follower timeline caches through a
+// queue + workers for normal accounts; celebrity posts merge into feeds at read time. Code level
+// (C4 L4): the fan-out pipeline classes (workers) and the read-path classes (API), mirrored 1:1
+// by the POC at _proof-of-concepts/06-case-studies/03-news-feed/. Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rnf` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rnfUser = actor 'User' {
+    description 'Posts, follows, and reads a home timeline.'
+  }
+
+  rnfSys = system 'News Feed' {
+    description 'Fan-out arithmetic rules everything: ~5.8k posts/s × ~200 followers ≈ 1M+ timeline writes/s (DDIA2 ch. 2 case study).'
+
+    rnfApi = service 'Feed API' {
+      description 'Post creation + timeline reads. Reads are IDs-then-hydrate.'
+      technology 'Python · FastAPI'
+      icon tech:python
+
+      rnfCodeTimelineReader = code 'TimelineReader' {
+        description 'GET /feed: pulls the materialized id list from the timeline cache, hydrates bodies from the post store, pages by cursor.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/03-news-feed/domain/timeline_reader.py
+      }
+      rnfCodeCelebrityMerger = code 'CelebrityMerger' {
+        description 'Read-time half of the hybrid: live-queries recent posts of the few celebrity accounts the reader follows and merges two time-sorted streams.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/03-news-feed/domain/celebrity_merger.py
+      }
+
+      rnfCodeTimelineReader -> rnfCodeCelebrityMerger 'merge streams'
+    }
+    rnfPosts = relationalDatabase 'Post store' {
+      description 'System of record for posts (id → content). Hydration target for timeline reads.'
+      technology 'PostgreSQL'
+    }
+    rnfGraph = relationalDatabase 'Follow graph store' {
+      description 'follower/followee edges; fan-out workers read follower lists here.'
+      technology 'PostgreSQL'
+    }
+    rnfQueue = eventStream 'Fan-out queue' {
+      description 'Buffers post events; the async boundary of the design.'
+      technology 'Redis Stream'
+      icon tech:redis
+    }
+    rnfWorkers = worker 'Fan-out workers' {
+      description 'Consume post events, insert the post id into each follower timeline. Celebrity posts are skipped here.'
+      technology 'Python worker'
+      icon tech:python
+
+      rnfCodeFanoutConsumer = code 'FanoutConsumer' {
+        description 'Consumes post events at-least-once from the queue; hands each to the fan-out. Redelivery-safe because the insert is idempotent.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/03-news-feed/domain/fanout_consumer.py
+      }
+      rnfCodeTimelineFanout = code 'TimelineFanout' {
+        description 'Reads the follower list, idempotently inserts the post id into each follower\'s timeline, skips celebrity authors (read-time merge handles them).'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/03-news-feed/domain/timeline_fanout.py
+      }
+
+      rnfCodeFanoutConsumer -> rnfCodeTimelineFanout 'fan out(post)'
+    }
+    rnfTimelines = cache 'Timeline cache' {
+      description 'Per-user materialized home timelines (post ids only).'
+      technology 'Redis'
+    }
+
+    rnfApi -> rnfPosts 'write post · hydrate ids'
+    rnfApi -> rnfQueue 'post event (async)'
+    rnfQueue -> rnfWorkers 'deliver post events'
+    rnfWorkers -> rnfGraph 'read follower lists'
+    rnfWorkers -> rnfTimelines 'insert post id per follower'
+    rnfApi -> rnfTimelines 'read timeline ids (+ celebrity merge)'
+
+    rnfCodeTimelineReader -> rnfTimelines 'LRANGE ids'
+    rnfCodeTimelineReader -> rnfPosts 'hydrate'
+    rnfCodeCelebrityMerger -> rnfPosts 'recent celebrity posts'
+    rnfCodeTimelineFanout -> rnfGraph 'followers(author)'
+    rnfCodeTimelineFanout -> rnfTimelines 'idempotent insert'
+  }
+
+  rnfUser -> rnfSys 'HTTPS: post, follow, read feed'
+}
+
+views {
+  view sdfp_newsfeed_container of rnfSys {
+    title 'News feed — container view (hybrid fan-out)'
+    include rnfUser, rnfSys, rnfApi, rnfPosts, rnfGraph, rnfQueue, rnfWorkers, rnfTimelines
+  }
+
+  view sdfp_newsfeed_code {
+    title 'News feed — code level (fan-out pipeline + read path)'
+    include rnfApi, rnfWorkers, rnfCodeTimelineReader, rnfCodeCelebrityMerger,
+      rnfCodeFanoutConsumer, rnfCodeTimelineFanout, rnfQueue, rnfTimelines, rnfGraph, rnfPosts
+  }
+}

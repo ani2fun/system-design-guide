@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# uber POC launcher. Matching service + Redis + Postgres. Port block 8380–8382.
+#   ./run [up] | stop | check | test | logs
+set -euo pipefail
+cd "$(dirname "$0")"
+PORTS=(8380 8381 8382)
+API="http://localhost:8380"
+
+free_ports() {
+  for p in "${PORTS[@]}"; do
+    local pids; pids=$(lsof -ti "tcp:${p}" 2>/dev/null || true)
+    [ -n "$pids" ] && { echo "  freeing port $p (kill $pids)"; kill -9 $pids 2>/dev/null || true; } || true
+  done
+}
+
+case "${1:-up}" in
+  up|"")
+    echo "▶ uber POC: clearing previous run + squatters on ${PORTS[*]}"
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    free_ports
+    docker compose up -d --build --wait
+    echo "✅ up. API $API  ·  Redis 8381  ·  Postgres 8382 (uber/uber)"
+    echo "   ./run test    # exactly-once trips + no-double-booking under contention"
+    ;;
+  stop|down) docker compose down --remove-orphans ;;
+  check) echo "▶ mypy --strict"; uv run --quiet mypy ;;
+  test)
+    echo "▶ mypy --strict"; uv run --quiet mypy
+    echo "▶ smoke"; uv run --quiet python tests/smoke.py "$API" ;;
+  logs) docker compose logs -f --tail=100 ;;
+  *) echo "usage: ./run [up|stop|check|test|logs]" >&2; exit 1 ;;
+esac

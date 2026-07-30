@@ -1,0 +1,81 @@
+// system-design-from-first-principles · case study 09 — "Design a Rate Limiter".
+// Container level: an infrastructure COMPONENT, not a product — the enforcement point sits in
+// the gateway path, the limiter middleware resolves rules and runs an atomic check against
+// shared counter state, and only allowed requests reach the protected services. Code level
+// (C4 L4): the three classes inside the limiter, mirrored by the POC at
+// ./examples/rate-limiter/ (deferred to the POC phase — `link`s are the contract). Click-docs
+// live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rrl` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rrlCaller = actor 'Calling client' {
+    description 'Any API consumer — well-behaved or not. The limiter treats intent as unknowable and counts requests.'
+  }
+
+  rrlSys = system 'Rate Limiter' {
+    description 'One decision, made millions of times a second, correctly under concurrency: allow(key) → yes / no + headers.'
+
+    rrlGateway = apiGateway 'API gateway (enforcement point)' {
+      description 'Every request passes here; the limiter check runs before routing. Adds single-digit-ms budget per request.'
+      technology 'Gateway middleware'
+    }
+    rrlLimiter = service 'Limiter' {
+      description 'Resolves which rule applies, runs the window algorithm, and answers allow/deny with Retry-After — all in one atomic round-trip to state.'
+      technology 'Python middleware'
+      icon tech:python
+
+      rrlCodeRuleResolver = code 'RuleResolver' {
+        description 'key → applicable rule (tier, limit, window). Rules are cached locally; the decision path never blocks on the rule store.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/09-rate-limiter/domain/rule_resolver.py
+      }
+      rrlCodeWindowAlgorithm = code 'WindowAlgorithm' {
+        description 'The algorithm zoo behind one interface: fixed window, sliding window counter, token bucket — each with its own burst personality.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/09-rate-limiter/domain/window_algorithm.py
+      }
+      rrlCodeAtomicCounter = code 'AtomicCounter' {
+        description 'The race-killer: check-and-increment as ONE atomic script (EVALSHA) — read-then-write from the app would lose updates under concurrency.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/09-rate-limiter/domain/atomic_counter.py
+      }
+
+      rrlCodeWindowAlgorithm -> rrlCodeAtomicCounter 'atomic check-and-increment'
+      rrlCodeRuleResolver -> rrlCodeWindowAlgorithm 'rule → algorithm + params'
+    }
+    rrlState = cache 'Counter state' {
+      description 'Per-key windows and buckets with TTLs. Shared across gateway nodes — the reason a local counter was never enough.'
+      technology 'Redis'
+    }
+    rrlRules = relationalDatabase 'Rule store' {
+      description 'Limits per key/tier/route; edited by operators, cached by limiters, versioned so a bad rule can be rolled back.'
+      technology 'Config DB'
+    }
+    rrlProtected = service 'Protected services' {
+      description 'The downstream services the limiter exists to defend.'
+      technology 'Internal APIs'
+    }
+
+    rrlGateway -> rrlLimiter 'allow(key)?'
+    rrlLimiter -> rrlState 'EVALSHA: atomic check-and-increment'
+    rrlLimiter -> rrlRules 'rule refresh (cached, async)'
+    rrlGateway -> rrlProtected 'allowed requests only'
+
+    rrlCodeAtomicCounter -> rrlState 'Lua script, one round-trip'
+    rrlCodeRuleResolver -> rrlRules 'periodic refresh'
+  }
+
+  rrlCaller -> rrlSys 'requests (429 + Retry-After when over limit)'
+}
+
+views {
+  view sdfp_ratelimiter_container of rrlSys {
+    title 'Rate limiter — container view (final architecture)'
+    include rrlCaller, rrlSys, rrlGateway, rrlLimiter, rrlState, rrlRules, rrlProtected
+  }
+
+  view sdfp_ratelimiter_code of rrlLimiter {
+    title 'Rate limiter — code level (inside the limiter)'
+    include rrlLimiter, rrlCodeRuleResolver, rrlCodeWindowAlgorithm, rrlCodeAtomicCounter,
+      rrlState, rrlRules
+  }
+}

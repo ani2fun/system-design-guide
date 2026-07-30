@@ -1,0 +1,98 @@
+// system-design-from-first-principles · case study 10 — "Design an Ad-Click Aggregator".
+// Container level: clicks land in a partitioned log (salted against hot ads), a stateful stream
+// aggregator turns them into event-time window counts feeding an OLAP store, and a periodic
+// batch job recomputes from the raw archive — the reconciliation safety net that makes the
+// counts billing-grade. Code level (C4 L4): the three classes inside the stream aggregator,
+// mirrored by the POC at _proof-of-concepts/06-case-studies/10-ad-click-aggregator/ (deferred to the POC phase — `link`s
+// are the contract). Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rca` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rcaViewer = actor 'Ad viewer' {
+    description 'Clicks ads in a browser or app — sometimes twice, sometimes maliciously.'
+  }
+  rcaAdvertiser = actor 'Advertiser' {
+    description 'Queries aggregated click metrics with low latency; pays based on these numbers.'
+  }
+
+  rcaSys = system 'Ad-Click Aggregator' {
+    description 'Counting at massive rate, correctly enough to bill on: stream for speed, batch for truth.'
+
+    rcaIngest = service 'Click ingest' {
+      description 'Verifies the signed impression id (the click\'s identity), then appends the event to the log. Stateless, horizontally scaled.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+    rcaLog = eventStream 'Click log' {
+      description 'Partitioned append-only log keyed by AdId — with salting for viral ads so one hot key can\'t melt a partition.'
+      technology 'Kafka'
+      icon tech:kafka
+    }
+    rcaStream = worker 'Stream aggregator' {
+      description 'Stateful event-time windowing with checkpoints: the fast path from click to queryable count.'
+      technology 'Flink-style worker'
+      icon tech:apache-flink
+
+      rcaCodeImpressionDeduper = code 'ImpressionDeduper' {
+        description 'Drops duplicate clicks by signed impression id within the dedup window — redelivery and double-clicks collapse to one count.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/10-ad-click-aggregator/domain/impression_deduper.py
+      }
+      rcaCodeWindowAggregator = code 'WindowAggregator' {
+        description 'Event-time tumbling windows; a watermark decides when a window is complete enough to emit, and late clicks fork to correction.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/10-ad-click-aggregator/domain/window_aggregator.py
+      }
+      rcaCodeIdempotentSink = code 'IdempotentSink' {
+        description 'Upserts aggregates keyed by (ad, window) — replaying a checkpoint re-emits the same rows, so recovery never double-counts.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/10-ad-click-aggregator/domain/idempotent_sink.py
+      }
+
+      rcaCodeImpressionDeduper -> rcaCodeWindowAggregator 'unique clicks'
+      rcaCodeWindowAggregator -> rcaCodeIdempotentSink 'closed windows'
+    }
+    rcaOlap = dataWarehouse 'Aggregates store' {
+      description 'Window counts shaped for advertiser queries; the batch job\'s corrections land here too.'
+      technology 'OLAP store'
+    }
+    rcaArchive = objectStorage 'Raw archive' {
+      description 'Every click, untouched — the source of truth the batch path recomputes from.'
+      technology 'S3-style object store'
+      icon aws:simple-storage-service
+    }
+    rcaBatch = batchJob 'Reconciliation job' {
+      description 'Periodically recomputes aggregates from the archive and corrects drift — the end-to-end audit that makes the stream trustworthy.'
+      technology 'Batch (Spark-style)'
+    }
+    rcaQuery = service 'Metrics API' {
+      description 'Advertiser dashboards: low-latency reads over the aggregates store.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+
+    rcaIngest -> rcaLog 'append click event'
+    rcaLog -> rcaStream 'consume (offsets + checkpoints)'
+    rcaLog -> rcaArchive 'archive raw events'
+    rcaBatch -> rcaArchive 'read raw'
+    rcaBatch -> rcaOlap 'corrections'
+    rcaQuery -> rcaOlap 'aggregate queries'
+
+    rcaCodeIdempotentSink -> rcaOlap 'UPSERT (ad, window)'
+  }
+
+  rcaViewer -> rcaSys 'clicks'
+  rcaAdvertiser -> rcaSys 'metrics queries'
+}
+
+views {
+  view sdfp_adclick_container of rcaSys {
+    title 'Ad-click aggregator — container view (final architecture)'
+    include rcaViewer, rcaAdvertiser, rcaSys, rcaIngest, rcaLog, rcaStream, rcaOlap, rcaArchive, rcaBatch, rcaQuery
+  }
+
+  view sdfp_adclick_code of rcaStream {
+    title 'Ad-click aggregator — code level (inside the stream aggregator)'
+    include rcaStream, rcaCodeImpressionDeduper, rcaCodeWindowAggregator, rcaCodeIdempotentSink,
+      rcaLog, rcaOlap
+  }
+}

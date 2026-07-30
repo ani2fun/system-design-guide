@@ -1,0 +1,55 @@
+# News feed POC — port block 8330–8332. One image, two roles (api + worker).
+name: poc-news-feed
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: feed
+      POSTGRES_PASSWORD: feed
+      POSTGRES_DB: feed
+    ports: ["8331:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U feed -d feed"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports: ["8332:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    image: poc-news-feed:latest
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PG_DSN: postgres://feed:feed@db:5432/feed
+      REDIS_URL: redis://redis:6379/0
+      CELEB_THRESHOLD: "3"
+    ports: ["8330:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    image: poc-news-feed:latest
+    command: ["python", "-m", "worker.main"]
+    environment:
+      PG_DSN: postgres://feed:feed@db:5432/feed
+      REDIS_URL: redis://redis:6379/0
+      CELEB_THRESHOLD: "3"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      api: {condition: service_healthy}   # API creates the schema first

@@ -1,0 +1,25 @@
+# Rate limiter POC — limiter + Redis (counter state). Port block 8400–8401.
+name: poc-rate-limiter
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["8401:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    ports: ["8400:8000"]
+    depends_on:
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30

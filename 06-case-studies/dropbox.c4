@@ -1,0 +1,100 @@
+// system-design-from-first-principles · case study 05 — "Design Dropbox".
+// Container level: an intelligent sync agent on each device (watcher/chunker/hasher), a file
+// service that mints presigned URLs and commits chunk manifests, content-addressed chunks in
+// blob storage (CDN in front), S3 event notifications closing the upload loop, and a sync
+// channel fanning "your file changed" to other devices. Code level (C4 L4): the three classes
+// inside the sync agent, mirrored by the POC at _proof-of-concepts/06-case-studies/05-dropbox/ (deferred to the POC phase —
+// `link`s are the contract). Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rdb` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rdbUser = actor 'User' {
+    description 'Edits files on several devices and expects them everywhere; may work offline for days.'
+  }
+
+  rdbSys = system 'Dropbox' {
+    description 'File sync at GB scale: bytes never traverse the app servers; the metadata store is the coordination point.'
+
+    rdbAgent = desktopApplication 'Sync agent (device)' {
+      description 'Runs on every device: watches the filesystem, chunks and hashes files, talks metadata to the file service and bytes to blob storage directly.'
+      technology 'Desktop/mobile client'
+
+      rdbCodeChunker = code 'Chunker' {
+        description 'Splits files into chunks and names each by its content hash — hash = identity, so dedup and resume fall out for free.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/05-dropbox/agent/chunker.py
+      }
+      rdbCodeManifestDiffer = code 'ManifestDiffer' {
+        description 'Compares the local manifest against the remote one and answers: which chunks must move? Only changed chunks ever travel.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/05-dropbox/agent/manifest_differ.py
+      }
+      rdbCodeSyncEngine = code 'SyncEngine' {
+        description 'The sync state machine: upload missing chunks → commit the manifest → visibility flips atomically. Conflicts resolve keep-both-copies, never silent overwrite.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/05-dropbox/agent/sync_engine.py
+      }
+
+      rdbCodeSyncEngine -> rdbCodeChunker 'chunk + hash'
+      rdbCodeSyncEngine -> rdbCodeManifestDiffer 'what moved?'
+    }
+    rdbGw = apiGateway 'LB / API gateway' {
+      description 'Fronts the metadata plane. Only fingerprints, manifests and shares pass here — never file bytes.'
+      technology 'L7 gateway'
+    }
+    rdbFs = service 'File service' {
+      description 'Mints presigned upload/download URLs, checks permissions, commits chunk manifests — the transaction that makes a version visible.'
+      technology 'Python · FastAPI'
+      icon tech:python
+    }
+    rdbMeta = relationalDatabase 'File metadata DB' {
+      description 'FileMetadata, chunk manifests, SharedFiles. The system of record for what exists; blob storage only knows chunks.'
+      technology 'PostgreSQL'
+    }
+    rdbBlob = objectStorage 'Blob storage' {
+      description 'Content-addressed chunks (key = hash). Devices PUT/GET here directly with presigned URLs.'
+      technology 'S3-style object store'
+      icon aws:simple-storage-service
+    }
+    rdbCdn = cdn 'CDN' {
+      description 'Hot-file downloads via signed URLs; fills from blob storage on miss.'
+      technology 'CDN'
+    }
+    rdbNotif = eventStream 'Upload notifications' {
+      description 'Blob-store events (“chunk uploaded”) flow back so the file service can mark manifest progress server-side.'
+      technology 'S3 events'
+    }
+    rdbSync = notificationService 'Sync channel' {
+      description 'Pushes “your file changed” to other devices — WebSocket for fresh files, polling for stale ones (the hybrid the lesson argues).'
+      technology 'WebSocket + polling'
+    }
+
+    rdbAgent -> rdbGw 'metadata ops: fingerprints, manifests, shares'
+    rdbGw -> rdbFs 'route'
+    rdbFs -> rdbMeta 'manifest commits · permission checks'
+    rdbFs -> rdbBlob 'mint presigned URLs'
+    rdbAgent -> rdbBlob 'chunk bytes: presigned PUT / GET'
+    rdbAgent -> rdbCdn 'hot downloads'
+    rdbCdn -> rdbBlob 'fill on miss'
+    rdbBlob -> rdbNotif 'chunk uploaded'
+    rdbNotif -> rdbFs 'mark chunk in manifest'
+    rdbFs -> rdbSync 'change events'
+    rdbSync -> rdbAgent 'file changed — pull new chunks'
+
+    rdbCodeSyncEngine -> rdbFs 'manifest ops'
+    rdbCodeChunker -> rdbBlob 'presigned chunk PUT'
+  }
+
+  rdbUser -> rdbSys 'edits files on any device'
+}
+
+views {
+  view sdfp_dropbox_container of rdbSys {
+    title 'Dropbox — container view (final architecture)'
+    include rdbUser, rdbSys, rdbAgent, rdbGw, rdbFs, rdbMeta, rdbBlob, rdbCdn, rdbNotif, rdbSync
+  }
+
+  view sdfp_dropbox_code of rdbAgent {
+    title 'Dropbox — code level (inside the sync agent)'
+    include rdbAgent, rdbCodeChunker, rdbCodeManifestDiffer, rdbCodeSyncEngine, rdbFs, rdbBlob
+  }
+}

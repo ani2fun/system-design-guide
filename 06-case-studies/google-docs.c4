@@ -1,0 +1,82 @@
+// system-design-from-first-principles · case study 11 — "Design Google Docs".
+// Container level: WebSocket connections route through a gateway that pins every editor of a
+// document to the SAME document server (consistent hashing — the transform needs one op order);
+// the doc server transforms concurrent ops, appends them to the op log, and periodically folds
+// snapshots so cold loads don't replay years of keystrokes. Code level (C4 L4): the three
+// classes inside the document server, mirrored by the POC at _proof-of-concepts/06-case-studies/11-google-docs/ (deferred
+// to the POC phase — `link`s are the contract). Click-docs live in ./_c4-docs/<elementId>.md.
+//
+// Identifiers carry the `rgd` prefix. No `specification` here — the ONE workspace spec lives in
+// synapse-features/03-architecture-docs/client-server.c4. Explicit `include` lists only (A2a).
+
+model {
+  rgdEditor = actor 'Editor' {
+    description 'One of several people typing in the same document at the same time, watching everyone\'s cursors.'
+  }
+
+  rgdSys = system 'Google Docs' {
+    description 'Collaborative editing: the hard problem is the data type — concurrent edits must converge without losing anyone\'s keystrokes.'
+
+    rgdGw = apiGateway 'Connection gateway' {
+      description 'Terminates editor WebSockets and routes by document id (consistent hash) — every editor of doc X lands on the same document server.'
+      technology 'WebSocket gateway'
+    }
+    rgdDocServer = service 'Document server' {
+      description 'The ordering authority for its documents: transforms concurrent ops, appends the canonical sequence, broadcasts to the session.'
+      technology 'Python · WebSockets'
+      icon tech:python
+
+      rgdCodeOtEngine = code 'OtEngine' {
+        description 'Operational Transformation: rewrites each incoming op against the concurrent ops it hasn\'t seen, so every replica applies the same effect in the same order.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/11-google-docs/domain/ot_engine.py
+      }
+      rgdCodeSessionManager = code 'SessionManager' {
+        description 'Who is in this document right now: membership, cursors, presence — ephemeral state that dies with the session, never logged.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/11-google-docs/domain/session_manager.py
+      }
+      rgdCodeSnapshotter = code 'Snapshotter' {
+        description 'Periodically folds the op log into a snapshot (state = fold(ops)) and compacts — cold loads start from the latest snapshot, not op #1.'
+        link https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/11-google-docs/domain/snapshotter.py
+      }
+
+      rgdCodeOtEngine -> rgdCodeSessionManager 'broadcast transformed ops'
+      rgdCodeSnapshotter -> rgdCodeOtEngine 'reads the canonical sequence'
+    }
+    rgdOpLog = logStore 'Operation log' {
+      description 'Append-only canonical op sequence per document — the source of truth; version history is a byproduct.'
+      technology 'Log store'
+    }
+    rgdSnapshots = objectStorage 'Snapshot store' {
+      description 'Periodic fold checkpoints; a cold load is snapshot + tail of the op log.'
+      technology 'Object store'
+      icon aws:simple-storage-service
+    }
+    rgdMeta = relationalDatabase 'Doc metadata DB' {
+      description 'Documents, sharing/ACLs, snapshot pointers.'
+      technology 'PostgreSQL'
+    }
+
+    rgdGw -> rgdDocServer 'ops routed by doc id (consistent hash)'
+    rgdDocServer -> rgdOpLog 'append canonical ops'
+    rgdDocServer -> rgdSnapshots 'periodic snapshot · cold-load read'
+    rgdDocServer -> rgdMeta 'ACL check · snapshot pointer'
+
+    rgdCodeOtEngine -> rgdOpLog 'append'
+    rgdCodeSnapshotter -> rgdSnapshots 'write snapshot'
+  }
+
+  rgdEditor -> rgdSys 'WebSocket: ops in, transformed ops + presence out'
+}
+
+views {
+  view sdfp_googledocs_container of rgdSys {
+    title 'Google Docs — container view (final architecture)'
+    include rgdEditor, rgdSys, rgdGw, rgdDocServer, rgdOpLog, rgdSnapshots, rgdMeta
+  }
+
+  view sdfp_googledocs_code of rgdDocServer {
+    title 'Google Docs — code level (inside the document server)'
+    include rgdDocServer, rgdCodeOtEngine, rgdCodeSessionManager, rgdCodeSnapshotter,
+      rgdGw, rgdOpLog, rgdSnapshots
+  }
+}

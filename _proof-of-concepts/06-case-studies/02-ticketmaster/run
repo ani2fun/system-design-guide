@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# ticketmaster POC launcher. Owns host ports 8320–8322.
+#   ./run [up]   free ports, (re)build, start, wait healthy, print endpoints
+#   ./run stop   tear everything down
+#   ./run test   smoke + concurrency (no-double-booking) tests
+#   ./run logs   follow logs
+set -euo pipefail
+cd "$(dirname "$0")"
+
+PORTS=(8320 8321 8322)
+API="http://localhost:8320"
+
+free_ports() {
+  for p in "${PORTS[@]}"; do
+    local pids
+    pids=$(lsof -ti "tcp:${p}" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+      echo "  freeing port $p (kill $pids)"
+      kill -9 $pids 2>/dev/null || true
+    fi
+  done
+}
+
+case "${1:-up}" in
+  up|"")
+    echo "▶ ticketmaster POC: clearing any previous run + squatters on ${PORTS[*]}"
+    docker compose down --remove-orphans >/dev/null 2>&1 || true
+    free_ports
+    echo "▶ building + starting (docker compose up -d --build --wait)"
+    docker compose up -d --build --wait
+    echo
+    echo "✅ up."
+    echo "   API       $API        (docs: $API/docs)"
+    echo "   Postgres  localhost:8321  (ticket/ticket)"
+    echo "   Redis     localhost:8322"
+    echo
+    echo "Try it:"
+    echo "   curl -s -XPOST $API/holds   -H 'content-type: application/json' -d '{\"seat_id\":\"show-1:S1\",\"holder\":\"alice\"}'"
+    echo "   curl -s -XPOST $API/confirm -H 'content-type: application/json' -d '{\"seat_id\":\"show-1:S1\",\"holder\":\"alice\",\"payment_key\":\"pk1\"}'"
+    echo "   curl -s $API/stats | python3 -m json.tool     # double_sold_seats should stay 0"
+    echo "   ./run test                                    # smoke + concurrency stampede"
+    ;;
+  stop|down)
+    docker compose down --remove-orphans
+    ;;
+  check)
+    echo "▶ static type check (mypy --strict)"
+    uv run --quiet mypy
+    ;;
+  test)
+    echo "▶ static type check (mypy --strict)"
+    uv run --quiet mypy
+    echo "▶ smoke test (against $API)"
+    python3 tests/smoke.py "$API"
+    echo "▶ concurrency stampede (no double-booking)"
+    python3 tests/concurrency.py "$API"
+    ;;
+  logs)
+    docker compose logs -f --tail=100
+    ;;
+  *)
+    echo "usage: ./run [up|stop|check|test|logs]" >&2
+    exit 1
+    ;;
+esac
