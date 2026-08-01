@@ -24,7 +24,7 @@ Handed a Yelp-like problem — 10 million businesses at roughly a kilobyte each 
 
 **Both failures share a root cause: no working connection between arithmetic and architecture.**
 
-And that connection is what real designs turn on. DDIA's social-network case study hinges on one multiplication: serving home timelines by querying at read time costs about **400 million lookups per second**, while precomputing timelines at write time costs **just over 1 million writes per second** [p. 35–36]. Same product, same users — a 400× gap between two architectures, visible only if you run the numbers. The multiplication *is* the design decision.
+And that connection is what real designs turn on. DDIA's social-network case study hinges on one multiplication: serving home timelines by querying at read time costs about **400 million lookups per second**, while precomputing timelines at write time costs **just over 1 million writes per second** <abbr title="[p. 35–36]">[i]</abbr>. Same product, same users — a 400× gap between two architectures, visible only if you run the numbers. The multiplication *is* the design decision.
 
 > This lesson teaches estimation the way strong candidates practice it: rarely, quickly, and always in service of a decision.
 
@@ -91,7 +91,7 @@ flowchart TD
 
 The comparison step only works if you carry thresholds in your head — a *ladder* of anchor values you can climb without looking anything up. It has three families of rungs.
 
-- ⏱️ **Time rungs** — how long things take, from the [latency and percentile machinery](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) you already have. In-memory cache reads come back in under a millisecond; a network hop within a region costs about 1–2 ms; a cached database read runs 1–5 ms, an uncached disk-backed read 5–30 ms, and a simple indexed row lookup on SSD-backed storage is on the order of 10 ms; crossing regions costs 50–150 ms. Then the tail: DDIA reports cross-region round trips of **up to several minutes** at high percentiles and intra-datacenter packet delays exceeding a minute during network reconfigurations [p. 350] — the ladder's reminder that averages are the top of the distribution, not the whole of it.
+- ⏱️ **Time rungs** — how long things take, from the [latency and percentile machinery](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) you already have. In-memory cache reads come back in under a millisecond; a network hop within a region costs about 1–2 ms; a cached database read runs 1–5 ms, an uncached disk-backed read 5–30 ms, and a simple indexed row lookup on SSD-backed storage is on the order of 10 ms; crossing regions costs 50–150 ms. Then the tail: DDIA reports cross-region round trips of **up to several minutes** at high percentiles and intra-datacenter packet delays exceeding a minute during network reconfigurations <abbr title="[p. 350]">[i]</abbr> — the ladder's reminder that averages are the top of the distribution, not the whole of it.
 - 🚀 **Rate rungs** — what one node of each type sustains: an in-memory cache node serves 100k+ operations/second; a single well-tuned relational database sustains tens of thousands of transactions per second — up to ~50k reads, 10–20k writes, and 20k+ per second for *simple* inserts on Postgres; a modern log broker moves up to ~1M messages/second; an application server holds 100k+ concurrent connections and pushes up to ~25 Gbps.
 - 📦 **Size rungs** — what fits where: a big cache node holds up to ~1 TB in memory; a single database node handles up to ~64 TiB (managed engines like Aurora stretch to 128 TiB); a broker retains tens of TB; object storage is effectively unbounded. 2025 cloud ceilings run to multi-TB RAM machines and tens of TB of local NVMe per instance — treat the specific instance names as perishable, but the order of magnitude as the point.
 
@@ -103,11 +103,11 @@ The compact table version of all of this lives below in *Numbers that matter*. N
 
 *Decision at stake: can timelines be computed at read time, or must they be precomputed — and does precomputing need a queue?*
 
-Inputs, from DDIA's case study: 500M posts/day, average 200 followers per user, 10M users online polling every 5 seconds [p. 34–35].
+Inputs, from DDIA's case study: 500M posts/day, average 200 followers per user, 10M users online polling every 5 seconds <abbr title="[p. 34–35]">[i]</abbr>.
 
-- Write rate: 5 × 10^8 posts/day ÷ ~10^5 s/day ≈ **5,800 posts/s** average, spiking to **150,000 posts/s** [p. 34].
-- Read-time approach: 10M online users ÷ 5 s = **2M timeline queries/s**; each checks ~200 followed accounts → **400M lookups/s** [p. 35].
-- Write-time approach: 5,800 posts/s × 200 followers ≈ **1.2M timeline writes/s** (*"just over 1 million"* in DDIA's words) [p. 36].
+- Write rate: 5 × 10^8 posts/day ÷ ~10^5 s/day ≈ **5,800 posts/s** average, spiking to **150,000 posts/s** <abbr title="[p. 34]">[i]</abbr>.
+- Read-time approach: 10M online users ÷ 5 s = **2M timeline queries/s**; each checks ~200 followed accounts → **400M lookups/s** <abbr title="[p. 35]">[i]</abbr>.
+- Write-time approach: 5,800 posts/s × 200 followers ≈ **1.2M timeline writes/s** (*"just over 1 million"* in DDIA's words) <abbr title="[p. 36]">[i]</abbr>.
 
 ```mermaid
 flowchart LR
@@ -131,13 +131,13 @@ flowchart LR
 
 **Consequence.**
 
-400M lookups/s is unbuildable at sane cost — hundreds of times beyond what any reasonable fleet of database nodes serves. 1.2M writes/s is large but tractable spread across cache shards. So the architecture flips to fan-out-on-write: precompute each timeline as a materialized view and serve reads from cache [p. 35–36]. And the peak seals a second decision: 150k posts/s × 200 = **30M timeline deliveries/s** at spike — you don't provision steady-state infrastructure for that; you put a queue in front of fan-out and let delivery lag a few seconds during bursts, exactly as DDIA prescribes [p. 36]. One multiplication chose the architecture; one more chose the queue.
+400M lookups/s is unbuildable at sane cost — hundreds of times beyond what any reasonable fleet of database nodes serves. 1.2M writes/s is large but tractable spread across cache shards. So the architecture flips to fan-out-on-write: precompute each timeline as a materialized view and serve reads from cache <abbr title="[p. 35–36]">[i]</abbr>. And the peak seals a second decision: 150k posts/s × 200 = **30M timeline deliveries/s** at spike — you don't provision steady-state infrastructure for that; you put a queue in front of fan-out and let delivery lag a few seconds during bursts, exactly as DDIA prescribes <abbr title="[p. 36]">[i]</abbr>. One multiplication chose the architecture; one more chose the queue.
 
 ### 💾 Worked estimate 2 — feed storage
 
 *Decision at stake: does the posts table shard, and when?*
 
-Inputs: the same 500M posts/day [p. 34]; assume ~1 KB per post — text plus metadata, media stored separately in object storage (assumption, stated in the room).
+Inputs: the same 500M posts/day <abbr title="[p. 34]">[i]</abbr>; assume ~1 KB per post — text plus metadata, media stored separately in object storage (assumption, stated in the room).
 
 - 5 × 10^8 posts/day × 10^3 bytes ≈ **500 GB/day** of new post data.
 - Per year: 500 GB × 365 ≈ **~180 TB/year**.
@@ -194,19 +194,19 @@ The working table — every figure carries its source: a DDIA page cite or an ex
 | DB read: cached / uncached disk | 1–5 ms / 5–30 ms | Reference figure |
 | Indexed row lookup on SSD-backed DB | ~10 ms | Reference figure |
 | Cross-region round trip | 50–150 ms | Reference figure |
-| Cross-region RTT, high percentiles | up to several **minutes** | [p. 350] |
-| GC pauses (modern, well-tuned) | a few ms (historically: minutes, stop-the-world) | [p. 370] |
-| Quartz clock drift | up to 200 ppm ≈ 6 ms per 30 s uncorrected; ~17 s/day | [p. 360] |
-| NTP sync error over the internet | ~35 ms at best; spikes to ~1 s | [p. 361] |
+| Cross-region RTT, high percentiles | up to several **minutes** | <abbr title="[p. 350]">[i]</abbr> |
+| GC pauses (modern, well-tuned) | a few ms (historically: minutes, stop-the-world) | <abbr title="[p. 370]">[i]</abbr> |
+| Quartz clock drift | up to 200 ppm ≈ 6 ms per 30 s uncorrected; ~17 s/day | <abbr title="[p. 360]">[i]</abbr> |
+| NTP sync error over the internet | ~35 ms at best; spikes to ~1 s | <abbr title="[p. 361]">[i]</abbr> |
 | Cache node: memory / throughput | up to ~1 TB / 100k+ ops/s | Reference figure |
 | Single DB node: storage / reads / writes | ~64 TiB (Aurora to 128 TiB) / up to ~50k read TPS / 10–20k write TPS (simple Postgres inserts 20k+/s) | Reference figure |
 | DB concurrent connections | 5–20k | Reference figure |
 | Log broker (Kafka-class), per broker | up to ~1M msgs/s · 1–5 ms end-to-end · up to ~50 TB retained | Reference figure |
 | App server | 100k+ concurrent connections · up to ~25 Gbps · 64–512 GB RAM standard | Reference figure |
 | Intra-DC bandwidth / cross-region bandwidth | ~10–20 Gbps standard / 100 Mbps–1 Gbps | Reference figure |
-| HDD annual failure rate | 2–5%/yr → a 10,000-disk fleet loses ~1 disk **per day** | [p. 44] |
-| SSD annual failure rate | 0.5–1%/yr; uncorrectable errors ~1/yr/drive | [p. 44] |
-| Fan-out reference workload | 500M posts/day = 5,800/s avg, 150k/s peak; ×200 fan-out ≈ 1.2M writes/s | [p. 34–36] |
+| HDD annual failure rate | 2–5%/yr → a 10,000-disk fleet loses ~1 disk **per day** | <abbr title="[p. 44]">[i]</abbr> |
+| SSD annual failure rate | 0.5–1%/yr; uncorrectable errors ~1/yr/drive | <abbr title="[p. 44]">[i]</abbr> |
+| Fan-out reference workload | 500M posts/day = 5,800/s avg, 150k/s peak; ×200 fan-out ≈ 1.2M writes/s | <abbr title="[p. 34–36]">[i]</abbr> |
 
 **Two cautions.**
 
@@ -222,24 +222,24 @@ Real teams use envelope math in a lifecycle, and knowing where you are in it mat
 **Before launch, estimation is all you have.**
 
 - There's no traffic to measure, so the first fleet is sized the way this lesson's worked examples run: assumed volumetrics × ladder thresholds, plus headroom.
-- The headroom isn't superstition — response time degrades sharply as throughput approaches capacity, because queueing delay explodes near saturation [p. 37].
+- The headroom isn't superstition — response time degrades sharply as throughput approaches capacity, because queueing delay explodes near saturation <abbr title="[p. 37]">[i]</abbr>.
 - Utilization targets (scale triggers sit at 70–80% CPU and memory for a reason) are the production encoding of that curve.
 
 **Peak-to-average discipline.**
 
-- DDIA's case-study workload averages 5,800 posts/s but spikes to 150,000 [p. 34] — a 26× ratio.
+- DDIA's case-study workload averages 5,800 posts/s but spikes to 150,000 <abbr title="[p. 34]">[i]</abbr> — a 26× ratio.
 - Provision to the average and the spike is an outage; provision to the spike and you idle 25× the fleet you need.
-- Production systems split the difference structurally: capacity for a sustainable multiple of average, a queue to absorb what exceeds it [p. 36], autoscaling to chase the daily curve.
+- Production systems split the difference structurally: capacity for a sustainable multiple of average, a queue to absorb what exceeds it <abbr title="[p. 36]">[i]</abbr>, autoscaling to chase the daily curve.
 - `Rule of thumb, not from source:` consumer diurnal peaks commonly run a small single-digit multiple of average; event-driven bursts, as the 26× shows, can be far worse.
 
 **After launch, measurement replaces estimation — mostly.**
 
 - Load tests and dashboards supersede assumed inputs, but envelope math stays on duty as the *sanity check*: does the cloud bill match the request math? Does the incident graph make sense?
-- Fleet failure math works the same way: at 2–5% annual HDD failure, a 10,000-disk fleet expects roughly a disk *per day* [p. 44] — disk replacement becomes a scheduled process with an arrival rate, not an incident.
+- Fleet failure math works the same way: at 2–5% annual HDD failure, a 10,000-disk fleet expects roughly a disk *per day* <abbr title="[p. 44]">[i]</abbr> — disk replacement becomes a scheduled process with an arrival rate, not an incident.
 
 **At growth inflections, estimation comes back.**
 
-An architecture built for one level of load is unlikely to survive 10× that load, so fast-growing systems revisit their architecture on every order of magnitude — and it's usually wasted effort to design more than one order ahead [p. 52]. That cadence is how experienced teams schedule re-architecture instead of being ambushed by it. Even tail-latency targets get the envelope treatment: Amazon specifies internal SLOs at p99.9 but found optimizing p99.99 too expensive for the benefit [p. 40–41] — a cost-benefit estimate deciding how much tail to buy, feeding back into the [nonfunctional requirements](/synapse/system-design-from-first-principles/foundations/nonfunctional-requirements) you committed to.
+An architecture built for one level of load is unlikely to survive 10× that load, so fast-growing systems revisit their architecture on every order of magnitude — and it's usually wasted effort to design more than one order ahead <abbr title="[p. 52]">[i]</abbr>. That cadence is how experienced teams schedule re-architecture instead of being ambushed by it. Even tail-latency targets get the envelope treatment: Amazon specifies internal SLOs at p99.9 but found optimizing p99.99 too expensive for the benefit <abbr title="[p. 40–41]">[i]</abbr> — a cost-benefit estimate deciding how much tail to buy, feeding back into the [nonfunctional requirements](/synapse/system-design-from-first-principles/foundations/nonfunctional-requirements) you committed to.
 
 ---
 
@@ -256,11 +256,11 @@ The recurring traps, most of them documented candidate behavior:
 - **Premature sharding.** The single most common estimation failure: proposing a shard key for a 10–100 GB dataset that fits one node a hundred times over. Run the Yelp math before the word *"shard"* leaves your mouth.
 - **Caching a thing that's already fast.** Candidates overestimate simple-lookup latency and bolt a cache onto a ~10 ms indexed read that already meets the SLO. Cache expensive queries, not fast ones — every component you add is complexity you must now defend.
 - **Queueing a write load the database eats for breakfast.** 5k writes/s is not *"high write throughput"* — simple inserts run 20k+/s on one tuned Postgres node. Queues are justified by delivery guarantees, decoupling, event patterns, or genuine spikes (~50k+ WPS), not by 5k/s.
-- **Sizing to the average.** The 26× peak-to-average spread in the fan-out example [p. 34] is the canonical counterexample; and remember from [percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) that latency claims quoted as averages hide the tail your users actually feel.
+- **Sizing to the average.** The 26× peak-to-average spread in the fan-out example <abbr title="[p. 34]">[i]</abbr> is the canonical counterexample; and remember from [percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) that latency claims quoted as averages hide the tail your users actually feel.
 - **Unit rot.** Bits vs. bytes (that 5 Tbps video estimate is 625 GB/s — an 8× error waiting to happen), per-day vs. per-second, GiB vs. GB at the wrong moment. Keep units written down at every step.
 - **Ending on a number.** *"So that's about 180 TB a year"* — and then silence. The interviewer's follow-up is always some form of *"…and what does that mean for your design?"* Beat them to it.
 
-The interviewer follow-ups to expect: *"Does that fit in memory?"* (ladder comparison), *"What changes at 10× the load?"* (DDIA's order-of-magnitude planning [p. 52] — know which component hits its ceiling first), and *"Where did that number come from?"* (source your inputs: given, assumed, or ladder).
+The interviewer follow-ups to expect: *"Does that fit in memory?"* (ladder comparison), *"What changes at 10× the load?"* (DDIA's order-of-magnitude planning <abbr title="[p. 52]">[i]</abbr> — know which component hits its ceiling first), and *"Where did that number come from?"* (source your inputs: given, assumed, or ladder).
 
 ---
 
