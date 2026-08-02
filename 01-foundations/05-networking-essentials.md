@@ -161,7 +161,7 @@ The price is extra round trips before the first byte of application data:
 
 - TLS 1.2: typically **2 round trips** on top of TCP.
 - TLS 1.3: typically **1 round trip**.
-- TLS 1.3 **session resumption** lets a returning client send data in the first flight — **“0‑RTT”** — with a sharp caveat: 0‑RTT data can be **replayed** by an attacker, so it is safe only for requests you would be willing to process twice [web: RFC 8446].
+- TLS 1.3 **session resumption** lets a returning client send data in the first flight — **“[0‑RTT](https://blog.cloudflare.com/introducing-0-rtt/)”** — with a sharp caveat: 0‑RTT data can be **replayed** by an attacker, so it is safe only for requests you would be willing to process twice [web: RFC 8446].
 
 Note the rhyme with TCP’s reconnect duplication problem: escaping a lost handshake is often paid for with **possible duplicates**.
 
