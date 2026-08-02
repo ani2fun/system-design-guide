@@ -30,23 +30,24 @@ Every system you design is machines talking over a network, so both problems —
 
 ## 🧅 Intuition first
 
-Networking survives as a field because of one idea: **layering**. When your code fetches a URL, you don't reason about voltages on a wire or radio frames in the air, just as you call `open()` on a file without instructing the disk head. Each layer offers a small promise to the layer above and hides everything below.
+Networking works because it is built in **layers**, much like a trip across a city uses different parts of the road system. You do not need to understand asphalt, traffic lights, or engine mechanics just to get from one place to another, and your app does not need to know how bits move through cables or Wi‑Fi to fetch a web page.
 
-Textbooks present seven OSI layers; practitioners use about four, and speak in the OSI numbers only for three of them — L3, L4, L7:
+Textbooks often describe seven OSI layers, but in practice networking is usually discussed in four layers, and people mainly refer to three of them by number: **L3, L4, and L7**.
 
-| Layer | What it moves | The promise it makes | You'll meet |
-| --- | --- | --- | --- |
-| Link | Frames on one local segment | "I'll get this to a machine on this network — probably" | Ethernet, WiFi |
-| Network (L3) | Packets between networks | "I'll route this toward that IP address — best effort, no promises" | IP |
-| Transport (L4) | Streams / datagrams end-to-end | "I'll add reliability and ordering — or not, your choice" | TCP, UDP, QUIC |
-| Application (L7) | Requests, messages, names | "I'll give these bytes meaning" | HTTP, DNS, TLS*, gRPC |
+| Layer | What it carries | Roads and traffic analogy | Examples |
+|---|---|---|---|
+| Link | Frames on one local network segment | Like driving on a single street or local road | Ethernet, Wi‑Fi |
+| Network (L3) | Packets across multiple networks | Like choosing roads between neighborhoods and cities | IP |
+| Transport (L4) | End-to-end streams or datagrams | Like deciding whether a trip needs tracking, retries, or strict order | TCP, UDP, QUIC |
+| Application (L7) | Requests, messages, and names | Like deciding what the vehicle is carrying and what it means | HTTP, DNS, gRPC, TLS* |
 
-*TLS is the awkward guest: it rides on top of TCP and underneath HTTP, securing the pipe rather than defining messages. Treat it as a security layer between L4 and L7.
+\* TLS is a special case. It does not define the message itself; it protects the trip. A good way to think of it is as a locked truck or sealed container moving along the route.
 
-**Two intuitions to carry.**
+## Two key ideas
 
-- First, everything above IP inherits IP's manners: the internet and datacenter networks are **asynchronous packet networks** — you can send a packet, but there is no guarantee of when, or whether, it arrives [p. 347]. Packets get dropped, delayed, duplicated, and reordered; every guarantee above that (TCP's ordering, say) is *software compensating*, not the network improving.
-- Second, transport and below run in the OS kernel — efficient, hard to change — while application protocols live in user space, flexible and fast-evolving. The interesting design choices therefore cluster at L4 and L7.
+First, the internet is not a guaranteed highway. It is more like a road network with traffic, delays, detours, and occasional accidents. Packets can be delayed, dropped, duplicated, or arrive out of order, and any stronger guarantee above that is created by software, not by the network magically becoming reliable.
+
+Second, the lower layers are usually handled by the operating system, which makes them efficient but harder to change. The higher layers are usually handled by applications, which makes them easier to update and redesign. That is why many of the most important networking decisions happen at **L4 and L7**.
 
 ---
 
