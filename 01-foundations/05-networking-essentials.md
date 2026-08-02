@@ -1,141 +1,271 @@
 ---
 title: "Networking Essentials"
-summary: "The networking a designer actually uses — TCP vs UDP honestly, TLS and DNS costs, HTTP/2 and QUIC, connection reuse, and what an unreliable network really guarantees."
+summary: "The slice of networking a system designer actually uses — TCP vs UDP, TLS and DNS costs, HTTP/2 and QUIC, connection reuse, and what an unreliable network really guarantees."
 essential: true
 ---
 
 # 🌐 Networking Essentials
 
-> **Prerequisites:** [Thinking in Trade-offs](/synapse/system-design-from-first-principles/foundations/thinking-in-tradeoffs) | **You'll be able to:** trace every round trip in an HTTPS request and name the cache that removes each one; choose between TCP, UDP, and QUIC — and defend the default; reason about timeouts on a network that guarantees nothing.
+> **Prerequisites:** [Thinking in Trade-offs](/synapse/system-design-from-first-principles/foundations/thinking-in-tradeoffs)
+> **You'll be able to:** trace every round trip in an HTTPS request and name the cache that removes each one; choose between TCP, UDP, and QUIC and defend the default; reason about timeouts on a network that guarantees nothing.
 
----
+***
 
-## 🧨 The problem (why this exists)
+## 🧨 The problem
 
-**Your service is fast.**
+### Latency you don't measure
 
-The profiler says the handler runs in five milliseconds, the database query in two. Then a user in Mumbai loads the page against your Virginia servers and waits most of a second before your code even begins to run. Nothing is broken. The time went somewhere you never instrumented: name lookups, handshakes, round trips across an ocean. Server processing is usually the only latency engineers measure and control — and on a cold request it can be the smallest line item on the bill.
+Your service is fast.
 
-**There is a second, nastier version.**
+The profiler says the handler runs in five milliseconds, the database query in two. Then a user in Mumbai hits your Virginia servers and waits most of a second before your code even starts to run. Nothing is broken.
+
+The missing time went into places you probably never instrumented: DNS lookups, TCP and TLS handshakes, and multiple round trips across an ocean. Server processing is usually the only latency engineers measure and control — but on a cold request, it can be the smallest line item.
+
+### Uncertainty you can't remove
+
+A second, nastier version shows up in every distributed system:
 
 - You send a payment request downstream and hear nothing for two seconds.
-- Did it fail? Succeed, with the response lost? Is the provider slow, dead, or mid-garbage-collection?
-- The network will not tell you — a lost request, a dead server, and a lost response look identical from where you stand: silence [p. 348].
+- Did it fail? Did it succeed and the response was lost? Is the provider just slow, dead, or paused by garbage collection?
+- From your point of view, a lost request, a dead server, and a lost response are indistinguishable: you see the same thing — silence [p. 348].
 
-Every system you design is machines talking over a network, so both problems — latency you didn't count, and uncertainty you can't remove — are load-bearing everywhere.
+Every system you design is machines talking over a network, so both problems — **latency you didn't count** and **uncertainty you can't remove** — are structural.
 
-> This lesson covers the slice of networking a designer actually uses, ending with the truth that shapes all distributed thinking: the network guarantees you *nothing*.
+> This lesson covers the slice of networking a designer actually uses, and ends with the truth that shapes all distributed thinking: the network guarantees you *nothing*.
 
----
+***
 
-## 🧅 Intuition first
+## 🧅 Intuition: layering
 
-Networking survives as a field because of one idea: **layering**. When your code fetches a URL, you don't reason about voltages on a wire or radio frames in the air, just as you call `open()` on a file without instructing the disk head. Each layer offers a small promise to the layer above and hides everything below.
+### The layering idea
 
-Textbooks present seven OSI layers; practitioners use about four, and speak in the OSI numbers only for three of them — L3, L4, L7:
+Networking works because of one idea: **layering**.
 
-| Layer | What it moves | The promise it makes | You'll meet |
-| --- | --- | --- | --- |
-| Link | Frames on one local segment | "I'll get this to a machine on this network — probably" | Ethernet, WiFi |
-| Network (L3) | Packets between networks | "I'll route this toward that IP address — best effort, no promises" | IP |
-| Transport (L4) | Streams / datagrams end-to-end | "I'll add reliability and ordering — or not, your choice" | TCP, UDP, QUIC |
-| Application (L7) | Requests, messages, names | "I'll give these bytes meaning" | HTTP, DNS, TLS*, gRPC |
+When your code fetches a URL, you do not think about voltages on a wire or radio frames in the air, just as you call `open()` on a file without telling the disk head where to move. Each layer:
 
-*TLS is the awkward guest: it rides on top of TCP and underneath HTTP, securing the pipe rather than defining messages. Treat it as a security layer between L4 and L7.
+- offers a small promise to the layer above, and
+- hides everything below.
 
-**Two intuitions to carry.**
+Textbooks describe seven OSI layers. In practice, people use about four, and talk in OSI numbers mainly for three of them: **L3, L4, L7**.
 
-- First, everything above IP inherits IP's manners: the internet and datacenter networks are **asynchronous packet networks** — you can send a packet, but there is no guarantee of when, or whether, it arrives [p. 347]. Packets get dropped, delayed, duplicated, and reordered; every guarantee above that (TCP's ordering, say) is *software compensating*, not the network improving.
-- Second, transport and below run in the OS kernel — efficient, hard to change — while application protocols live in user space, flexible and fast-evolving. The interesting design choices therefore cluster at L4 and L7.
+| Layer          | What it moves                     | Promise it makes                                                | You'll meet            |
+|----------------|-----------------------------------|-----------------------------------------------------------------|------------------------|
+| Link           | Frames on one local segment       | "I'll get this to a machine on this network — probably."        | Ethernet, Wi‑Fi        |
+| Network (L3)   | Packets between networks          | "I'll route this toward that IP address — best effort, no guarantees." | IP                     |
+| Transport (L4) | End-to-end streams / datagrams    | "I'll add reliability and ordering — or keep it simple, your choice." | TCP, UDP, QUIC         |
+| Application (L7) | Requests, messages, names       | "I'll give these bytes meaning."                                | HTTP, DNS, TLS*, gRPC  |
 
----
+\* **TLS is the awkward guest.** It sits on top of TCP and underneath HTTP, securing the pipe rather than defining application messages. Treat it as a **security layer between L4 and L7**.
 
-## ⚙️ How it works
+For a more textbook-style overview of the OSI model, see  
+[What is the OSI model? (AWS)](https://aws.amazon.com/what-is/osi-model/).
 
-### 🤝 TCP, honestly
+### Two core intuitions
 
-TCP turns IP's unreliable packets into a **stream**: a stateful, ordered, byte-oriented connection between two endpoints. Before any data moves, client and server perform the three-way handshake — SYN, SYN-ACK, ACK — one full round trip of pure ceremony. From then on, TCP does four jobs [pp. 348–349]:
+- **Asynchronous packet networks.** Everything above IP inherits IP’s behavior: the internet and datacenter networks are **asynchronous packet networks**. You can send a packet, but there is no guarantee of *when* it will arrive — or *whether* it will arrive at all [p. 347]. Packets are dropped, delayed, duplicated, and reordered. Any stronger guarantee (for example TCP’s ordering) is **software compensating**, not the network becoming more reliable.
 
-- 🔁 **Retransmission** — the receiver acknowledges data; missing ACKs trigger resends.
-- 🔢 **Ordering** — sequence numbers let the receiver reassemble packets in the order sent, even when the network reorders them.
-- 🧮 **Integrity** — checksums catch corruption in transit.
-- 🚰 **Backpressure** — flow control keeps a fast sender from drowning a slow receiver, and congestion control keeps everyone from drowning the network. When you write to a socket, the OS buffers the data and decides when it may actually leave the machine [p. 349].
+- **Kernel vs user space.** Transport and below run in the OS **kernel** — fast and efficient, but hard to change. Application protocols live in **user space** — flexible and fast‑evolving. Most interesting design choices for system designers therefore cluster at **L4 and L7**.
 
-That list earns TCP the word *"reliable,"* and the word oversells it. Here is what TCP still can't promise [p. 349]:
+***
 
-1. **An ACK does not mean your message was processed.** It means the remote *kernel* buffered the bytes; the application may crash before reading them. Only a response from the application itself confirms effect.
-2. **Deduplication is per-connection.** If the connection drops and your client reconnects and resends, TCP's duplicate suppression does not carry across — the remote application can receive the message twice.
-3. **A failed connection tells you nothing about progress.** You cannot know how much of the sent data was processed — none, some, or all.
-4. **No timing guarantee at all.** Retransmission is unbounded in time; TCP cannot make a congested network fast, only hide loss as delay [pp. 349, 354].
+## ⚙️ Architecture: how the main pieces work
 
-Those four are the technical backbone of idempotency keys, retries, and timeout design in every later module.
+### 🤝 TCP: what “reliable” really means
+
+TCP turns IP’s unreliable packets into a **byte stream**: a stateful, ordered, byte‑oriented connection between two endpoints.
+
+Before any application data moves, client and server perform the **three‑way handshake**:
+
+1. SYN
+2. SYN‑ACK
+3. ACK
+
+That costs one full round trip purely in setup.
+
+After the handshake, TCP does four jobs [pp. 348–349]:
+
+- **Retransmission.** The receiver sends acknowledgments (ACKs). Missing ACKs trigger resends.
+- **Ordering.** Sequence numbers let the receiver reassemble packets in the order they were sent, even if the network reorders them.
+- **Integrity.** Checksums detect corruption in transit.
+- **Backpressure.** Flow control stops a fast sender from overwhelming a slow receiver, and congestion control prevents everyone from overwhelming the network. When you write to a socket, the OS buffers your data and decides when it can actually leave the machine [p. 349].
+
+Those jobs earn TCP the word *“reliable”*, but that word oversells it. TCP **cannot** promise [p. 349]:
+
+1. **ACK ≠ “processed”.** An ACK means the remote *kernel* buffered your bytes, not that the application read and acted on them. The application can crash with your message still sitting in its socket buffer.
+2. **No cross‑connection deduplication.** TCP suppresses duplicates only within one connection. If a connection drops, your client reconnects and resends, the remote application can see the message twice.
+3. **No progress information on failure.** When a connection dies, you do not know how much of the sent data was processed: none, some, or all.
+4. **No timing guarantee.** Retransmission time is unbounded. TCP cannot make a congested network fast; it only hides loss as extra delay [pp. 349, 354].
+
+These limits are the technical backbone of **idempotency keys, retries, and timeout design** in later modules.
+
+***
 
 ### 🎙️ UDP: when late data is worthless
 
-**UDP is the opposite bet:**
+UDP makes the opposite trade.
 
-- no handshake, no retransmission, no ordering, no backpressure — an 8-byte header versus TCP's 20–60, datagrams flung at an IP and port.
-- Why want that? Because retransmission is only a gift when late data still has value.
-- A packet holding 20 ms of call audio that arrives 500 ms late is worse than useless — players fill the gap with silence and the *"retry"* happens at the human layer (*"sorry, you cut out"*) [p. 354].
-- Live video, game state, telemetry, and DNS lookups make the same trade: lower delay variability in exchange for accepting loss [p. 354].
+- No handshake.
+- No retransmission.
+- No ordering.
+- No backpressure.
+- A fixed **8‑byte header** versus TCP’s 20–60 bytes.
+- Datagrams are simply thrown at an IP address and port.
 
-The interview default is TCP — so much so that it usually goes unsaid. Reach for UDP only when you can articulate why stale data is worthless *and* you have an answer for browser clients, which expose UDP essentially only through WebRTC.
+Why choose that? Because **retransmission only helps when late data is still valuable**.
 
-### ⚡ QUIC and HTTP/3, in brief
+- A packet with 20 ms of call audio that arrives 500 ms late is worse than useless: players fill the gap with silence, and the “retry” is a human saying “sorry, you cut out” [p. 354].
+- Live video, game state, telemetry, and DNS lookups make the same trade: **lower latency variability** in exchange for **accepting loss** [p. 354].
 
-QUIC is a modern transport built on top of UDP that rebuilds TCP's reliability per-stream and bakes TLS into the transport itself, so the connection and encryption handshakes happen together — one round trip, or zero when resuming a known server [web: RFC 9000]. Because each stream's delivery is independent, one lost packet stalls only its own stream, not the whole connection. HTTP/3 is HTTP running over QUIC [web: RFC 9114]. DDIA's analysis of TCP's limits applies to QUIC too [p. 348] — it is a better-engineered set of the same promises, not an escape from the unreliable network underneath. For interviews, the right framing is to treat QUIC as *"a better TCP without TCP's ubiquity"* — mention it where handshake latency or mobile networks genuinely hurt, and spend your minutes elsewhere.
+For interviews and designs:
 
-### 🔒 TLS at a glance
+- The **default** is TCP — so much so that it often goes unmentioned.
+- Reach for UDP only when you can clearly explain **why stale data is worthless** *and* how you handle **browser clients**, which expose UDP essentially only via WebRTC.
 
-**TLS gives you an encrypted, integrity-protected channel** and proof (via certificate) that you're talking to the server you named.
+***
 
-The cost is more round trips before the first byte of application data: the classic TLS 1.2 handshake spends two, TLS 1.3 cuts it to one, and TLS 1.3 **session resumption** lets a returning client send data in the first flight — *"0-RTT"* — with one sharp caveat: 0-RTT data can be replayed by an attacker, so it's safe only for requests you'd be willing to process twice [web: RFC 8446]. Note the rhyme with TCP's reconnect-duplication problem: at every layer, the escape from a lost handshake is paid for in possible duplicates.
+### ⚡ QUIC and HTTP/3
 
-One scoping honesty: TLS encrypts the pipe, it does not sanctify the contents. A request arriving over HTTPS is still attacker-controlled input — validate it server-side.
+**QUIC** is a modern transport protocol built on top of UDP.
 
-### 📇 DNS: the phone book with a TTL clock
+It:
 
-**Before any handshake, the client must turn `api.example.com` into an IP address.**
+- recreates TCP‑like **reliability per stream** on top of UDP,
+- **bundles TLS into the transport**, so the transport and encryption handshakes are combined — often **1 round trip**, or **0** on resumption [web: RFC 9000],
+- delivers each stream independently, so a loss affecting one stream stalls only that stream, not the entire connection.
 
-- Your machine asks a **recursive resolver** (your ISP's, or a public one), which — on a cache miss — walks the name hierarchy: root servers point to the `.com` servers, which point to `example.com`'s authoritative servers, which answer [web: RFC 1034].
-- Lookups typically travel over UDP.
-- The design that makes this scale is caching: every answer carries a **TTL** (time-to-live), and every resolver along the path may serve it from cache until the TTL expires.
+**HTTP/3** is HTTP running over QUIC [web: RFC 9114].
 
-**Two design consequences follow.**
+DDIA’s analysis of TCP’s limits still applies [p. 348]: QUIC is a better‑engineered set of roughly the same promises, not an escape from the unreliable network underneath.
 
-- First, DNS is free client-side load balancing: return a rotated list of IPs and different clients will land on different servers — this is also the standard way to avoid a load balancer being a single point of failure (two LBs in different regions, DNS rotating between them).
-- Second, **your changes propagate no faster than the TTL**. A *"DNS failover"* with a 300-second TTL means up to five minutes of clients faithfully dialing the dead address.
-- Low TTLs buy agility and cost you cache efficiency; that tension is the whole game.
+For interviews, a good framing is:
 
-### 🚧 HTTP/1.1 vs HTTP/2: head-of-line blocking at two layers
+> “QUIC is like a better TCP implemented over UDP, with built‑in TLS and per‑stream independence — but it’s newer and less ubiquitous.”
 
-**HTTP/1.1 allows one outstanding request at a time per connection:**
+Mention QUIC when:
 
-- response N must finish before request N+1 gets going.
-- One slow response blocks everything queued behind it — **head-of-line (HOL) blocking at the application layer**.
-- Browsers work around it by opening several parallel connections per host — typically six — which multiplies every handshake cost [web: MDN — HTTP/1.x connection management].
+- handshake latency hurts (mobile, long‑distance links), or
+- multiplexed streams over a single connection are central.
 
-**HTTP/2 fixes that layer:**
+Then spend your detailed design time on other fundamentals.
 
-it multiplexes many concurrent **streams** over a single TCP connection, interleaving frames so a slow response no longer blocks the others [web: RFC 9113]. But look one layer down. All those streams ride one TCP byte-stream, and TCP promises in-order delivery of that stream as a whole — so one lost packet halts delivery of *every* stream until the retransmission arrives. HTTP/2 moved HOL blocking from the application layer to the transport layer [web: RFC 9114]. That residue is precisely what QUIC removes with independent streams — which is why HTTP/3 exists.
+***
 
-> The lesson generalizes beautifully for interviews: fixing a bottleneck at one layer often reveals the same bottleneck one layer down.
+### 🔒 TLS: securing the channel
 
-### ♻️ Connection reuse: why handshake latency compounds
+**TLS** gives you:
 
-**Count the ceremony a cold HTTPS request pays before one application byte moves:**
+- an **encrypted** and **integrity‑protected** channel, and
+- proof (via certificates) that you are talking to the server associated with the hostname.
 
-- a DNS lookup (unless cached), one round trip of TCP handshake, one of TLS 1.3.
-- On an 80 ms cross-Atlantic path that is ~240 ms of overhead before the request itself even departs — against a handler that runs in 5 ms.
-- Now multiply: a service that opens a fresh connection per request pays that tax on *every call*, and a microservice chain pays it at *every hop*.
+The price is extra round trips before the first byte of application data:
 
-**The remedy is boring and universal: don't throw connections away.**
+- TLS 1.2: typically **2 round trips** on top of TCP.
+- TLS 1.3: typically **1 round trip**.
+- TLS 1.3 **session resumption** lets a returning client send data in the first flight — **“0‑RTT”** — with a sharp caveat: 0‑RTT data can be **replayed** by an attacker, so it is safe only for requests you would be willing to process twice [web: RFC 8446].
 
-HTTP keep-alive holds the connection open for subsequent requests; HTTP/2 goes further and shares one connection among concurrent streams. Clients and services maintain **connection pools** — a set of pre-warmed connections handed out per request and returned after — so steady-state traffic pays the handshake almost never. The catch is that a persistent connection is **state** held at both ends: pools must be sized, idle connections reaped, dead ones detected, and at scale (say, a million WebSocket clients) that state dominates the design. That thread continues in the real-time delivery and load-balancing lessons.
+Note the rhyme with TCP’s reconnect duplication problem: escaping a lost handshake is often paid for with **possible duplicates**.
 
-### 🧭 The walkthrough: what happens when you fetch a URL
+Scope honesty:
 
-Assemble the pieces. You type `https://api.example.com/feed` on a cold client:
+- TLS **encrypts the pipe**. It does **not** make the contents trustworthy.
+- An HTTPS request is still attacker‑controlled input; you must validate it server‑side.
+
+***
+
+### 📇 DNS: names, addresses, and TTL
+
+Before any TCP or TLS handshake, the client needs an IP address for `api.example.com`.
+
+The typical path:
+
+- Your machine asks a **recursive resolver** (e.g., your ISP’s resolver or a public one).
+- On a cache miss, the resolver walks the hierarchy [web: RFC 1034]:
+  - root servers → `.com` servers → `example.com`’s authoritative servers → final answer.
+- Most DNS queries are carried over **UDP**.
+- Every DNS answer includes a **TTL (time‑to‑live)**. Any resolver in the path may cache and serve that answer until the TTL expires.
+
+This leads to two major design consequences:
+
+- **Client‑side load balancing.** DNS can rotate between multiple IPs. Different clients land on different servers. This is the standard way to avoid a load balancer being a single point of failure (e.g., two load balancers in different regions, DNS rotating between them).
+
+- **Change propagation is TTL‑bounded.** Your configuration changes propagate no faster than the TTL. A “DNS failover” with a 300‑second TTL means up to **five minutes** of clients faithfully trying the old, possibly dead, address. Low TTLs buy agility but reduce cache efficiency; that tension is the key DNS trade‑off.
+
+***
+
+### 🚧 HTTP/1.1 vs HTTP/2: head‑of‑line blocking
+
+#### HTTP/1.1
+
+HTTP/1.1 allows **one outstanding request at a time per TCP connection**:
+
+- Response N must finish before request N+1 proceeds.
+- One slow response blocks everything queued behind it: **head‑of‑line (HOL) blocking at the application layer**.
+- Browsers work around this by opening several parallel TCP connections per host (typically about six), which multiplies handshake overhead [web: MDN — HTTP/1.x connection management].
+
+#### HTTP/2
+
+HTTP/2 fixes HOL at the **application layer**:
+
+- It multiplexes many concurrent **streams** over a single TCP connection.
+- Frames from different requests are interleaved so one slow response does not block others [web: RFC 9113].
+
+But look one layer down:
+
+- All streams share one **TCP byte stream**.
+- TCP must deliver that byte stream **in order**, as a whole.
+- One lost TCP packet stalls **all HTTP/2 streams** until the retransmission arrives.
+
+HTTP/2 moved HOL blocking from **L7 to L4** [web: RFC 9114].
+
+This residue is exactly what QUIC removes with per‑stream independence over UDP — which is why **HTTP/3** exists.
+
+> General lesson: fixing a bottleneck at one layer often reveals the same bottleneck one layer down.
+
+***
+
+### ♻️ Connection reuse: compounding handshake costs
+
+#### Cold HTTPS path
+
+On a cold HTTPS request, count the ceremony before the first application byte:
+
+- DNS lookup (unless cached),
+- **TCP handshake** — 1 round trip,
+- **TLS 1.3 handshake** — 1 round trip.
+
+On an 80 ms cross‑Atlantic link, that is roughly **240 ms of overhead** before the request itself even departs — versus a handler that runs in 5 ms.
+
+Multiply this:
+
+- A service that opens a fresh connection for every request pays that cost on **every call**.
+- A microservice chain that opens fresh connections at each hop pays it **at every hop**.
+
+#### The standard remedy
+
+The universal remedy is **connection reuse**:
+
+- **HTTP keep‑alive** keeps the TCP connection open for subsequent requests.
+- **HTTP/2** goes further and shares one connection among many concurrent streams.
+- Clients and services maintain **connection pools**:
+  - a set of pre‑warmed connections,
+  - handed out per request and returned after.
+
+In steady‑state, handshake costs become almost negligible.
+
+The catch: a persistent connection is **shared state** at both ends. At scale, you must:
+
+- size pools,
+- reap idle connections,
+- detect dead ones, and
+- manage millions of long‑lived connections (for example WebSockets) where connection state dominates the design.
+
+***
+
+## 🧭 Data flow: fetching a URL end‑to‑end
+
+Consider a cold client fetching:
+
+> `https://api.example.com/feed`
 
 ```mermaid
 sequenceDiagram
@@ -172,21 +302,30 @@ sequenceDiagram
     Note over B,S: Connection kept alive: the next request repeats only this last step
 ```
 
-**Read it as a ledger of round trips — and of the cache that deletes each line.**
+Read this as a **ledger of round trips and caches**:
 
-- **DNS:** one or more round trips, deleted by resolver/OS caches until the TTL runs out.
-- **TCP handshake:** one round trip, deleted by keep-alive and pooling.
-- **TLS:** one round trip (two on TLS 1.2), deleted by session resumption — or folded into the transport handshake by QUIC.
-- **Server processing:** yours.
-- **The request/response round trip itself:** irreducible, unless you move the server closer (that's the CDN lesson).
-- Teardown happens eventually too — FIN/ACK exchanges in both directions — but nobody waits on it.
+- **DNS:** one or more round trips, removed by resolver/OS/browser caches until TTL expiry.
+- **TCP handshake:** 1 round trip, removed by keep‑alive and pooling.
+- **TLS handshake:** 1 round trip (2 for TLS 1.2), removed by session resumption — or combined with transport handshake by QUIC.
+- **HTTP request/response:** 1 round trip plus server processing — irreducible, unless you move the server closer (CDN/edge) or cache the response.
+- **Connection teardown** (FIN/ACK) happens eventually, but clients do not wait for it.
 
-### 🕳️ What the network actually guarantees: nothing
+***
 
-**Now the expert close — the part that quietly underwrites every distributed-systems lesson in this book.**
+## 🕳️ Failure modes: what the network actually guarantees
 
-- When you send a request and hear nothing back, all of the following are possible: your request was dropped; it is sitting in a queue; the server crashed; the server is paused (a garbage collection, a suspended VM) and will resume; the server did the work and the *response* was dropped; or the response is merely delayed [pp. 347–348].
-- The killer property is not that these failures happen — it's that they are **indistinguishable** from where you sit [p. 348]:
+### Indistinguishable outcomes
+
+When you send a request and receive no response for some time T, the following are all possible [pp. 347–348]:
+
+- The request was dropped.
+- The request is still queued in the network or on the server.
+- The server crashed.
+- The server is paused (GC, VM suspension) and will resume later.
+- The server completed the work but the **response was dropped or delayed**.
+- Nothing is wrong; the system is simply slower than T.
+
+From your point of view, all of these produce the same observation:
 
 ```mermaid
 flowchart TB
@@ -196,112 +335,203 @@ flowchart TB
     classDef data   fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
     classDef async  fill:#f3e8ff,stroke:#9333ea,color:#581c87;
 
-    A["You sent a request.<br/>Silence for T milliseconds."]:::client
+    A["You sent a request.<br/>Silence for T ms."]:::client
     A --> B["Request lost<br/>or still queued"]:::async
     A --> C["Server crashed —<br/>or just paused (GC, VM)"]:::svc
-    A --> D["Work was done;<br/>the response was lost or delayed"]:::data
-    A --> E["Nothing is wrong;<br/>it is simply slower than T"]:::edge
+    A --> D["Work was done;<br/>response lost or delayed"]:::data
+    A --> E["Nothing is wrong;<br/>just slower than T"]:::edge
     B --> F["Identical observation: silence.<br/>The network cannot tell you which."]:::client
     C --> F
     D --> F
     E --> F
 ```
 
-**The standard response is a timeout:** give up after T and assume failure — knowing the work may still happen after you gave up [p. 348].
+The network fundamentally provides no direct way to distinguish these cases.
 
-So how long should T be? If the network guaranteed a maximum delay *d* and servers a maximum handling time *r*, then 2d + r would be a provably safe timeout. Real packet networks guarantee neither [pp. 352–353]. Delay comes overwhelmingly from **queueing** — in switch buffers when a link is contended, in the OS when all cores are busy, in hypervisors while a VM is paused, in TCP's own sender-side buffering — and queues grow without bound as utilization approaches capacity [pp. 353–354]. This is a designed property, not an accident: circuit-switched telephone networks *did* reserve fixed bandwidth end-to-end and delivered bounded delay, but at the price of idle capacity; packet switching was chosen because bursty data traffic gets far better utilization from sharing. *"Variable delays in networks are not a law of nature but simply the result of a cost/benefit trade-off"* [pp. 355–357].
+### Timeouts as a design choice
 
-**So timeouts are a genuine trade-off, not a constant to memorize:**
+The usual response is a **timeout**: after waiting T, you give up and assume failure — even though the work may still finish after you give up [p. 348].
 
-- too short, and you declare slow-but-alive nodes dead — possibly retrying work that succeeded (duplicates), or shedding load onto already-loaded survivors until the whole system cascades;
-- too long, and users wait on the dead [p. 352].
-- There is no correct value derivable from first principles; mature systems choose timeouts experimentally from measured latency distributions, or continuously adapt them [pp. 355, 357].
+You might wish for a formula:
 
-Sit with the conclusion, because it is the foundation the rest of the book builds on: *"The fact that such partial failures can occur is the defining characteristic of distributed systems"* [p. 388]. Networks drop, delay, duplicate, and reorder; anything you build that pretends otherwise is wrong in ways that surface at 3 a.m.
+- If the network guaranteed a maximum delay **d**, and servers guaranteed a maximum processing time **r**, then **2d + r** would be a safe timeout.
+- Real packet networks guarantee **neither** [pp. 352–353].
 
----
+Delays are dominated by **queueing**:
 
-## ⚖️ Trade-offs
+- switch buffers when links are congested,
+- OS queues when all cores are busy,
+- hypervisor pauses in virtualized environments,
+- TCP’s own sender‑side buffering [pp. 353–354].
 
-Transport choice:
+Queues grow without bound as utilization approaches capacity. That is a deliberate design trade‑off: circuit‑switched telephone networks reserved end‑to‑end bandwidth and provided bounded delay at the cost of idle capacity; packet‑switched networks were chosen because bursty data traffic gets far better utilization from sharing. **Variable delay is a cost/benefit decision, not a law of nature** [pp. 355–357].
 
-| Option | Gives you | Costs you | Use when |
-| --- | --- | --- | --- |
-| TCP | Ordering, retransmission, backpressure; universal support | Handshake RTT; loss surfaces as delay; transport-level HOL blocking | Default — nearly everything [p. 349] |
-| UDP | Minimal latency variance, no connection state, tiny header | No delivery/ordering guarantees; you build any reliability yourself; weak browser support | Late data is worthless: voice/video, gaming, telemetry, DNS [p. 354] |
-| QUIC (HTTP/3) | TCP-like reliability per stream, combined 1-RTT transport+TLS handshake, no cross-stream HOL | Newer, less ubiquitous tooling/support; still an unreliable network underneath | Handshake latency or multiplexed streams dominate; mobile/lossy links [web: RFC 9000] |
+Timeouts are therefore a **trade‑off**, not a constant to memorize:
 
-Connection strategy:
+- Too **short**: you declare slow‑but‑alive nodes dead, retry work that may have succeeded, and push load onto already‑loaded nodes — risking cascades.
+- Too **long**: users wait on truly dead nodes [p. 352].
 
-| Option | Gives you | Costs you | Use when |
-| --- | --- | --- | --- |
-| New connection per request | Zero connection state; trivially simple clients | Full handshake tax (DNS + TCP + TLS) on every call | Rare, one-off calls; scripts |
-| Keep-alive + pooling | Handshake amortized to ~zero; predictable latency | Pool sizing/reaping; state at both ends; stale-connection detection | The default for services and clients |
-| Long-lived persistent (WebSocket-style) | Server push, lowest per-message overhead | Connection state dominates at scale; L4-aware load balancing; reconnect storms | High-frequency bidirectional traffic |
+Mature systems:
 
----
+- choose timeouts **experimentally** from observed latency distributions, or
+- **adapt them continuously** (e.g., Phi Accrual failure detector in Cassandra and Akka, TCP’s own retransmission timers) [p. 355].
+
+Because timed‑out requests may still execute, retries in production are:
+
+- paired with **exponential backoff + jitter**, and
+- guarded by **idempotency keys** for mutating operations, so duplicates are harmless.
+
+Sit with the underlying conclusion:
+
+> “The fact that such partial failures can occur is the defining characteristic of distributed systems.” [p. 388]
+
+Networks drop, delay, duplicate, and reorder. Any design that assumes otherwise will fail in the tail.
+
+***
+
+## ⚖️ Key trade‑offs
+
+### Transport choice
+
+| Option   | Gives you                                                     | Costs you                                                 | Use when                                  |
+|---------|----------------------------------------------------------------|------------------------------------------------------------|-------------------------------------------|
+| TCP     | Ordering, retransmission, backpressure; universal support      | Handshake RTT; loss surfaces as delay; HOL at transport   | **Default** for almost everything [p. 349] |
+| UDP     | Minimal latency variance, no connection state, tiny header     | No delivery/ordering guarantees; you build reliability; weak browser support | Late data is worthless (voice/video, gaming, telemetry, DNS) [p. 354] |
+| QUIC    | TCP‑like reliability per stream, 1‑RTT combined transport+TLS handshake, no cross‑stream HOL | Newer, less ubiquitous tooling; still runs over unreliable network | Handshake latency or multiplexed streams dominate; mobile/lossy links [web: RFC 9000] |
+
+### Connection strategy
+
+| Option                        | Gives you                                              | Costs you                                        | Use when                                  |
+|-------------------------------|--------------------------------------------------------|--------------------------------------------------|-------------------------------------------|
+| New connection per request    | No connection state; extremely simple clients         | Full DNS + TCP + TLS handshake on every call    | Rare one‑off calls, simple scripts        |
+| Keep‑alive + pooling          | Handshakes amortized; stable latency                  | Pool sizing, state at both ends, stale detection | **Default** for services and HTTP clients |
+| Long‑lived persistent (e.g., WebSocket) | Server push, lowest per‑message overhead         | Connection state dominates at scale; L4‑aware load balancing; reconnect storms | High‑frequency bidirectional traffic      |
+
+***
 
 ## 🔢 Numbers that matter
 
-**The physics floor:**
+### Physics and round trips
 
-- light in fiber travels at roughly two-thirds of c — about 200,000 km/s — so New York ↔ London (~5,600 km) has a theoretical minimum round trip of ~56 ms; in practice budget >80 ms, versus <1 ms to a nearby server.
-- No optimization reclaims physics; only moving endpoints closer does.
+- Light in fiber travels at roughly two‑thirds the speed of light: about **200,000 km/s**.
+- New York ↔ London (~5,600 km) has a theoretical minimum round trip of ~**56 ms**; in practice, budget ≥80 ms.
+- Local datacenter round trips can be <1 ms. No software optimization beats physics; only **moving endpoints closer** does.
 
-**The handshake ledger, in round trips before the first application byte:**
+Handshake ledger before the first application byte:
 
-- TCP 1; TLS 1.2 +2; TLS 1.3 +1; TLS 1.3 resumed +0 to +1; QUIC 1 combined, 0 resumed [web: RFC 8446, RFC 9000].
-- Worked example on an 80 ms RTT path: fresh HTTPS ≈ 240 ms of pure setup+request round trips before the response arrives; on a pooled connection ≈ 80 ms — a 3× difference your profiler will never show you.
+- TCP: 1 RTT.
+- TLS 1.2: +2 RTTs.
+- TLS 1.3: +1 RTT.
+- TLS 1.3 resumption: 0–1 RTT.
+- QUIC: 1 combined RTT, 0 on resumption [web: RFC 8446, RFC 9000].
 
-Headers, for intuition about overhead: UDP 8 bytes; TCP 20–60 bytes.
+Example on an 80 ms RTT path:
 
-**How often the network itself fails:**
+- Fresh HTTPS: ≈ 240 ms of setup + request/response round trips before the body arrives.
+- Reused connection: ≈ 80 ms (only HTTP round trip) — a ~3× improvement your profiler on server code will not show.
 
-- one study of a medium-sized datacenter found ~12 network faults per month — half disconnecting one machine, half a whole rack [p. 350].
-- Delay tails are worse than intuition: round trips across cloud regions have been observed reaching several *minutes* at high percentiles, and even intra-datacenter packet delay can exceed a minute during a switch topology reconfiguration [p. 350].
-- Set timeouts with the tail in mind, not the median — the percentile machinery for that lives in [Latency, Throughput & Percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles), and the estimation habit in [Estimation & the Numbers](/synapse/system-design-from-first-principles/foundations/estimation-and-numbers).
+Headers for intuition:
 
----
+- UDP header: 8 bytes.
+- TCP header: 20–60 bytes.
+
+### How often the network fails
+
+Empirical numbers [p. 350]:
+
+- One study of a medium‑sized datacenter observed ~**12 network faults per month**, roughly half disconnecting a single machine and half a whole rack.
+- Delay tails can be extreme:
+  - cross‑region RTTs reaching **minutes** at high percentiles,
+  - intra‑datacenter packet delays exceeding **a minute** during topology changes.
+
+Timeouts and capacity planning therefore care about **tail latency**, not just medians. Percentile analysis lives in [Latency, Throughput & Percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) and estimation habits in [Estimation & the Numbers](/synapse/system-design-from-first-principles/foundations/estimation-and-numbers).
+
+***
 
 ## 🏭 In production
 
-**Connection pooling is ambient in real systems:**
+### Connection pooling
 
-- every serious HTTP client, database driver, and RPC framework maintains a pool, and a great many production incidents are pool incidents — exhaustion under a traffic spike, stale connections to a rebooted backend, or a thundering herd of re-handshakes when a load balancer restarts and drops a million keep-alive connections at once.
-- Rule of thumb, not from source: treat *"pool exhausted"* and *"connection reset by peer"* as capacity signals, not mysteries.
+Connection pooling is ambient in real systems:
 
-**TLS is usually terminated at the edge:**
+- Every serious HTTP client, database driver, and RPC framework uses pools.
+- Many incidents are **pool incidents**:
+  - pool exhaustion under spikes,
+  - stale connections to rebooted backends,
+  - thundering herd of re‑handshakes when a load balancer restarts and drops millions of keep‑alive connections.
 
-an L7 load balancer or CDN edge accepts the client's TCP+TLS handshakes and forwards requests to backends over separate, long-lived internal connections. This moves the handshake round trips onto the short client↔edge path and lets the expensive origin hops be amortized across all users. Rule of thumb, not from source: this edge-termination pattern is a large share of what a CDN buys you even for uncacheable, dynamic traffic.
+Rule of thumb: treat “pool exhausted” and “connection reset by peer” as **capacity signals**, not mysteries.
 
-**QUIC/HTTP-3 is real but unevenly deployed** — major browsers and large CDNs speak it, much intra-datacenter traffic doesn't. The calibration for interviews: knowing it earns credit with performance-minded interviewers; leaning on it rarely wins a design.
+### TLS termination at the edge
 
-**Timeout tuning in the wild follows DDIA's advice:**
+TLS is usually terminated at an **edge**:
 
-measure round-trip distributions across time and machines, then set timeouts empirically — or adapt continuously, as the Phi Accrual failure detector does in Cassandra and Akka, and as TCP's own retransmission timers do [p. 355]. In multitenant clouds, a noisy neighbor saturating shared links or CPUs can swing your latencies with no visibility into the cause — another reason static timeout constants age badly [pp. 354–355]. And because a timed-out request may still have executed, production retry policy is never bare: retries come with exponential backoff plus jitter, and mutating APIs get idempotency keys so a duplicate arrival is harmless. Those two patterns get their own treatment later in the book.
+- An L7 load balancer or CDN edge accepts clients’ TCP + TLS handshakes.
+- It then forwards requests to backends over **separate, long‑lived internal connections**.
 
-**DNS in production is your cheapest availability lever and your slowest one:** rotating records across two load balancers in different regions is the standard defense against an LB as single point of failure, but failover speed is bounded by the TTL your clients cached.
+Benefits:
 
----
+- Handshake round trips happen on the short client↔edge path.
+- Origin hops are amortized across many requests.
+
+A large share of the benefit of a CDN for dynamic traffic is this **edge termination and connection reuse**, even when responses are not cached.
+
+### QUIC / HTTP/3 deployment
+
+QUIC and HTTP/3 are real but unevenly deployed:
+
+- Major browsers and CDNs support them.
+- A lot of intra‑datacenter traffic still runs over TCP / HTTP/1.1 / HTTP/2.
+
+For interviews:
+
+- Knowing QUIC earns credit with performance‑minded interviewers.
+- Relying on it as the core of a design is rarely necessary.
+
+### Timeout tuning and retries
+
+Timeout tuning in production follows DDIA’s advice [p. 355]:
+
+- measure round‑trip distributions across nodes and time,
+- set timeouts empirically, or adapt them continuously (Phi Accrual, TCP retransmission logic).
+
+In multitenant clouds, a noisy neighbor saturating shared NICs, links, or CPUs can distort your latencies with no direct visibility [pp. 354–355], making **static timeout constants age badly**.
+
+Because a timed‑out request may have actually executed:
+
+- retries use **exponential backoff + jitter**, and
+- mutating APIs use **idempotency keys** so duplicate arrivals are safe.
+
+DNS in production is both your **cheapest availability lever** and your **slowest**:
+
+- rotating records across two load balancers in different regions is standard practice to avoid an LB as a single point of failure,
+- but failover speed is capped by the **TTL** clients have cached.
+
+***
 
 ## 🪤 Pitfalls & interview traps
 
-<div style="border-left:4px solid #da5233;background:rgba(218,82,51,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
+> ⚠️ **Trap 1: “TCP is reliable, so my request went through.”**
+> An ACK means the remote kernel buffered your bytes, not that the application processed them. The app can crash with your request still unread [p. 349].
 
-⚠️ **The trap: *"TCP is reliable, so my request went through."*** TCP's ACK means the remote kernel buffered your bytes — not that the application processed them; the app can crash with your request sitting unread in its socket buffer, and a connection error tells you nothing about how much was processed [p. 349]. The twin trap: **"the timeout fired, so it failed."** A timeout is the *absence of information* — the work may have completed after you gave up [p. 348]. Together these force the design rule you'll use all book: confirmation requires an application-level response, and any retry of a mutation must be idempotent.
+> ⚠️ **Trap 2: “The timeout fired, so it failed.”**
+> A timeout means *you stopped waiting*, not that the work never completed [p. 348].
 
-</div>
+Together they imply two design rules used throughout this book:
 
-More traps interviewers actually probe:
+- **Confirmation** requires an application‑level response.
+- Any **retry of a mutation** must be idempotent.
 
-- **Retrying without idempotency.** TCP dedupes only within one connection; your client's reconnect-and-resend can double-charge a card [p. 349]. Expect the follow-up: *"your payment call timed out — walk me through exactly what you do next."*
-- **"HTTP/2 solved head-of-line blocking."** It solved the application layer; the TCP layer still stalls every stream on one lost packet [web: RFC 9114]. Saying *"moved, not solved — QUIC is the actual fix"* is the senior answer.
-- **Ignoring the handshake tax in a microservice chain.** Five hops × fresh TLS connections per call quietly adds up; the interviewer is fishing for *"keep-alive and connection pools"* the moment latency budgets come up.
-- **Treating DNS changes as instant failover.** Clients keep dialing the cached IP until the TTL expires — say the TTL-bound out loud when you propose DNS failover.
-- **Choosing UDP for *"performance"* where loss isn't acceptable** — or where your users are in browsers, which effectively confine UDP to WebRTC.
-- **Trusting HTTPS request bodies.** Encryption in transit says nothing about the honesty of the sender; validate server-side.
+Other common traps:
 
----
+- **Retrying without idempotency.** After a timeout, a reconnect‑and‑resend can double‑charge a card because TCP deduplication is per connection [p. 349]. Expect: “Your payment call timed out — what do you do next?”
+- **“HTTP/2 solved head‑of‑line blocking.”** It solved HOL at the application layer, but HOL remains at the TCP layer. Saying “moved, not solved — QUIC is the real fix” is the senior answer [web: RFC 9114].
+- **Ignoring handshake tax in microservice chains.** Five hops × fresh TLS connections per call quietly add up. Interviewers want to hear “keep‑alive and connection pools” when latency budgets are discussed.
+- **Treating DNS changes as instant failover.** Clients keep using cached IPs until TTL expiry. Always mention TTL when you propose DNS‑based failover.
+- **Choosing UDP for generic ‘performance’** where loss is not acceptable, or in browser‑heavy environments without a clear WebRTC usage story.
+- **Trusting HTTPS request bodies.** Encryption in transit says nothing about the honesty of the sender; always validate server‑side.
+
+***
 
 ## ✅ Check yourself
 
@@ -324,50 +554,54 @@ More traps interviewers actually probe:
 <details>
 <summary><strong>Q:</strong> Walk through fetching <code>https://api.example.com/feed</code> from a completely cold client. Name every round trip before the first byte of the response body — and the mechanism that would remove each one on a warm request.</summary>
 
-**A:** (1) DNS resolution — one or more round trips through the recursive resolver (which may itself walk root → TLD → authoritative on a cold cache); removed by DNS caching until the TTL expires. (2) TCP three-way handshake — one round trip; removed by keep-alive/connection pooling. (3) TLS 1.3 handshake — one round trip (two under TLS 1.2); removed by session resumption, or merged into the transport handshake entirely by QUIC. (4) The HTTP request/response itself — one round trip plus server processing; irreducible except by moving the server closer (CDN/edge) or caching the response. Cold total on an 80 ms path: roughly 320 ms with cold DNS; warm total: ~80 ms plus processing.
+**A:**
+1. **DNS resolution** — one or more round trips via the recursive resolver (which may itself walk root → TLD → authoritative). Removed by DNS caching until TTL expiry.
+2. **TCP three‑way handshake** — one round trip. Removed by keep‑alive and connection pooling.
+3. **TLS 1.3 handshake** — one round trip (two under TLS 1.2). Removed by TLS session resumption, or merged into the transport handshake by QUIC.
+4. **HTTP request/response** — one round trip plus server processing. Irreducible except by moving the server closer (CDN/edge) or caching the response.
+
+On an 80 ms path, that’s roughly 320 ms cold (including DNS) vs ~80 ms warm (no DNS, handshake already paid).
 
 </details>
 
 <details>
-<summary><strong>Q:</strong> Why is there no "correct" timeout value for a service call, and what do mature systems do instead?</summary>
+<summary><strong>Q:</strong> Why is there no single “correct” timeout value for a service call, and what do mature systems do instead?</summary>
 
-**A:** A provably safe timeout of 2d + r exists only if the network has a bounded maximum delay d and servers a bounded handling time r. Packet-switched networks bound neither: delay is dominated by queueing — switch buffers, busy CPUs, VM pauses, TCP's own sender buffering — which grows without bound near capacity, and cross-region round trips have reached minutes at high percentiles [pp. 350, 352–354]. Short timeouts declare slow-but-alive nodes dead (duplicate work, load shed onto survivors, cascade risk); long ones make users wait on genuinely dead nodes [p. 352]. Mature systems therefore choose timeouts experimentally from measured latency distributions or adapt them continuously (Phi Accrual in Cassandra/Akka) [p. 355], pair every retry with exponential backoff plus jitter, and make retried mutations idempotent because the timed-out attempt may have executed.
+**A:**
+A provably safe timeout of 2d + r exists only if the network has a bounded maximum delay d and servers have a bounded maximum handling time r. Packet‑switched networks bound neither: delay is dominated by queueing (switch buffers, busy CPUs, VM pauses, TCP buffering) which grows without bound near capacity, and cross‑region delays can reach minutes [pp. 350, 352–354]. Short timeouts declare slow‑but‑alive nodes dead and cause duplicate work or cascades; long ones make users wait on dead nodes [p. 352]. Mature systems measure latency distributions and set timeouts empirically or adapt them (Phi Accrual in Cassandra/Akka) [p. 355], pair retries with exponential backoff + jitter, and make mutating operations idempotent because a timed‑out attempt may still have completed.
 
 </details>
 
 <details>
-<summary><strong>Q:</strong> Your p50 latency is steady at 30 ms, but p99 spikes to 2 s at random times that correlate with nothing in your own deploys. What network-level explanations should you investigate first?</summary>
+<summary><strong>Q:</strong> Your p50 latency is 30 ms, but p99 spikes to 2 s at random times unrelated to your deploys. What network-level causes should you consider?</summary>
 
-**A:** Queueing, in its several homes: contended switch/link buffers upstream (congestion), the destination host's OS queueing requests while all cores are busy, hypervisor pauses on virtualized hosts, and TCP retransmissions surfacing packet loss as latency [pp. 353–354]. In a multitenant cloud, a noisy neighbor saturating shared links, NICs, or CPUs produces exactly this signature, and you have no direct visibility into their usage [pp. 354–355]. This is why tail latency, not median, drives timeout and capacity choices.
+**A:**
+Likely causes are **queueing and contention**: upstream switch/link congestion, destination host OS queues when CPUs are busy, hypervisor pauses, and TCP retransmissions turning packet loss into latency [pp. 353–354]. In a multitenant cloud, a “noisy neighbor” saturating shared links, NICs, or CPUs produces exactly this pattern, and you often have no direct visibility into their usage [pp. 354–355]. Tail latency, not median, must drive timeout and capacity decisions.
 
 </details>
 
----
+***
 
-## 🔬 PoC — Proof of concepts
+## 🔬 Proofs of concept & deeper reading
 
-Read the protocols this lesson summarises at the depth production work eventually demands:
+To go deeper on the protocols summarized here:
 
-- [High Performance Browser Networking](https://hpbn.co/) — Ilya Grigorik's free O'Reilly book on
-  TCP, TLS and HTTP/1.1 → HTTP/3, and exactly why each round trip costs what it does.
-- [Beej's Guide to Network Programming](https://beej.us/guide/bgnet/) — sockets from first
-  principles; the classic that turns *"a connection"* from an abstraction into `connect()` and
-  `recv()`.
-- [The Illustrated TLS 1.3 Connection](https://tls13.xargs.org/) — a real handshake, every byte
-  annotated, so the encryption this lesson treats as a box becomes concrete.
+- [High Performance Browser Networking](https://hpbn.co/) — TCP, TLS, HTTP/1.1 → HTTP/2 → HTTP/3, and why each round trip costs what it does.
+- [Beej's Guide to Network Programming](https://beej.us/guide/bgnet/) — sockets from first principles (`connect()`, `send()`, `recv()`).
+- [The Illustrated TLS 1.3 Connection](https://tls13.xargs.org/) — a real TLS 1.3 handshake, byte‑by‑byte.
 
----
+***
 
 ## 📚 Sources
 
-- DDIA2 ch. 9 pp. 347–349 (asynchronous packet networks; six failure modes of a request; TCP's guarantees and their limits — kernel ACKs, per-connection dedup, unknown progress on failure).
-- DDIA2 ch. 9 pp. 350–353 (network faults in practice — ~12/month per medium DC, multi-minute delay tails; timeouts, the 2d + r bound, premature-death cascades).
-- DDIA2 ch. 9 pp. 353–355 (queueing as the source of delay variability; TCP vs UDP for latency-sensitive traffic; noisy neighbors; experimentally chosen and adaptive timeouts, Phi Accrual).
-- DDIA2 ch. 9 pp. 355–357 (circuit vs packet switching; bounded delay vs utilization; variable delay as a cost/benefit trade-off).
-- DDIA2 ch. 9 p. 388 (partial failure as the defining characteristic of distributed systems).
-- [web: RFC 8446] — TLS 1.3: 1-RTT handshake, session resumption, 0-RTT replay caveat.
-- [web: RFC 9000] — QUIC: UDP-based, combined transport+TLS handshake, independent streams.
-- [web: RFC 9113] — HTTP/2 stream multiplexing over one TCP connection.
-- [web: RFC 9114] — HTTP/3 over QUIC; TCP head-of-line blocking as HTTP/2's residual limit.
-- [web: RFC 1034] — DNS name hierarchy, recursive resolution, TTL-governed caching.
-- [web: MDN — HTTP/1.x connection management] — one-at-a-time requests per HTTP/1.1 connection; browsers' ~6 parallel connections per host.
+- DDIA2 ch. 9 pp. 347–349 (asynchronous packet networks; six failure modes of a request; TCP’s guarantees and limits).
+- DDIA2 ch. 9 pp. 350–353 (network faults in practice; multi‑minute delay tails; timeouts and their trade‑offs).
+- DDIA2 ch. 9 pp. 353–355 (queueing as the source of delay variability; TCP vs UDP for latency‑sensitive traffic; noisy neighbors; adaptive timeouts).
+- DDIA2 ch. 9 pp. 355–357 (circuit vs packet switching; variable delay as a trade‑off).
+- DDIA2 ch. 9 p. 388 (partial failure as defining characteristic of distributed systems).
+- [web: RFC 8446] TLS 1.3 — handshake, resumption, 0‑RTT replay caveats.
+- [web: RFC 9000] QUIC — UDP‑based, combined transport+TLS, independent streams.
+- [web: RFC 9113] HTTP/2 — stream multiplexing over one TCP connection.
+- [web: RFC 9114] HTTP/3 — HTTP over QUIC; TCP HOL as HTTP/2’s residual limit.
+- [web: RFC 1034] DNS — name hierarchy, recursion, TTL‑based caching.
+- [web: MDN — HTTP/1.x connection management] — HTTP/1.1 connections and browser limits.
