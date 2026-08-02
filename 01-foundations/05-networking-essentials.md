@@ -30,24 +30,24 @@ Every system you design is machines talking over a network, so both problems —
 
 ## 🧅 Intuition first
 
-Networking works because it is built in **layers**, much like a trip across a city uses different parts of the road system. You do not need to understand asphalt, traffic lights, or engine mechanics just to get from one place to another, and your app does not need to know how bits move through cables or Wi‑Fi to fetch a web page.
+Networking works because it is built in **layers**. Each layer does one job and hides the details below it. That is why your code can fetch a web page without knowing anything about voltages on a wire, Wi‑Fi radio signals, or how data physically travels across the network — just as you can call `open()` on a file without knowing how a disk stores data.
 
-Textbooks often describe seven OSI layers, but in practice networking is usually discussed in four layers, and people mainly refer to three of them by number: **L3, L4, and L7**.
+Textbooks describe seven OSI layers, but in practice people usually work with four layers and mostly refer to three of them by number: **L3, L4, and L7**. The OSI model is a framework that divides network communication into layers, each with its own specific job before passing data to the next. [aws.amazon](https://aws.amazon.com/what-is/osi-model/)
 
-| Layer | What it carries | Roads and traffic analogy | Examples |
+| Layer | What it moves | Simple way to think about it | Examples |
 |---|---|---|---|
-| Link | Frames on one local network segment | Like driving on a single street or local road | Ethernet, Wi‑Fi |
-| Network (L3) | Packets across multiple networks | Like choosing roads between neighborhoods and cities | IP |
-| Transport (L4) | End-to-end streams or datagrams | Like deciding whether a trip needs tracking, retries, or strict order | TCP, UDP, QUIC |
-| Application (L7) | Requests, messages, and names | Like deciding what the vehicle is carrying and what it means | HTTP, DNS, gRPC, TLS* |
+| Link | Frames on one local network segment | Like driving on one street — "I'll get this to a device on this local network, if possible." | Ethernet, Wi‑Fi |
+| Network (L3) | Packets between networks | Like choosing roads between towns — "I'll route this toward that IP address, best effort, no guarantees." | IP |
+| Transport (L4) | End-to-end streams or datagrams | Like deciding whether the trip needs tracking, retries, or order — "I can add reliability and ordering, or keep it simple, your choice." | TCP, UDP, QUIC |
+| Application (L7) | Requests, messages, and names | Like deciding what the vehicle is actually carrying — "I'll give these bytes meaning." | HTTP, DNS, gRPC, TLS* |
 
-\* TLS is a special case. It does not define the message itself; it protects the trip. A good way to think of it is as a locked truck or sealed container moving along the route.
+\* TLS is a special case. It sits above TCP and below HTTP, and its job is to secure the connection rather than define the message. Think of it as a locked container on the trip — a security layer between L4 and L7.
 
-## Two key ideas
+**Two intuitions to carry.**
 
-First, the internet is not a guaranteed highway. It is more like a road network with traffic, delays, detours, and occasional accidents. Packets can be delayed, dropped, duplicated, or arrive out of order, and any stronger guarantee above that is created by software, not by the network magically becoming reliable.
+- First, everything above IP inherits IP's nature: the internet and datacenter networks are **asynchronous packet networks**. That means the road system has traffic, delays, and detours — you can send a packet, but there is no guarantee of when, or even whether, it arrives. Packets can be delayed, dropped, duplicated, or reordered, and any extra reliability above that (like TCP's ordering) is **software compensating for the network's imperfections**, not the network becoming reliable on its own. The transport layer's focus is ensuring data packets arrive in the right order, without losses or errors. [aws.amazon](https://aws.amazon.com/what-is/osi-model/)
 
-Second, the lower layers are usually handled by the operating system, which makes them efficient but harder to change. The higher layers are usually handled by applications, which makes them easier to update and redesign. That is why many of the most important networking decisions happen at **L4 and L7**.
+- Second, the transport layer and everything below it run in the operating system kernel — fast and efficient, but hard to change. Application protocols live in user space, where they are flexible and evolve quickly. That is why many of the most important design choices in networking happen at **L4 and L7**.
 
 ---
 
