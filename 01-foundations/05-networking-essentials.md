@@ -60,6 +60,11 @@ Textbooks describe seven OSI layers. In practice, people use about four, and tal
 For a more textbook-style overview of the OSI model, see  
 [What is the OSI model? (AWS)](https://aws.amazon.com/what-is/osi-model/).
 
+To see encapsulation happen — headers wrapping the payload layer by layer on the way down, and unwrapping on the way up — step through it yourself:
+
+```simulator name=osi-encapsulation height=560 title="OSI Encapsulation Simulator"
+```
+
 ### Two core intuitions
 
 - **Asynchronous packet networks.** Everything above IP inherits IP’s behavior: the internet and datacenter networks are **asynchronous packet networks**. You can send a packet, but there is no guarantee of *when* it will arrive — or *whether* it will arrive at all [p. 347]. Packets are dropped, delayed, duplicated, and reordered. Any stronger guarantee (for example TCP’s ordering) is **software compensating**, not the network becoming more reliable.
