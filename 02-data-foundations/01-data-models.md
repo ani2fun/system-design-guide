@@ -24,7 +24,7 @@ You have `users`, `posts`, and a `follows` relationship. It sounds like one quer
 
 **Neither answer is "correct."**
 
-They are the *same data* under two shapes, and the shape decides which operation is cheap and which is brutal. This is the quiet truth of system design: **the data model is the most consequential layer you touch.** It shapes not just performance but how you write every piece of code above it and even how you *think* about the problem — an application is a stack of models, each expressed in terms of the one below [p. 65]. Pick the wrong shape at the bottom and every layer above inherits the awkwardness.
+They are the *same data* under two shapes, and the shape decides which operation is cheap and which is brutal. This is the quiet truth of system design: **the data model is the most consequential layer you touch.** It shapes not just performance but how you write every piece of code above it and even how you *think* about the problem — an application is a stack of models, each expressed in terms of the one below <abbr title="[p. 65]">[i]</abbr>. Pick the wrong shape at the bottom and every layer above inherits the awkwardness.
 
 This lesson is about picking the shape deliberately. We'll build the two dominant general-purpose models — relational and document — from first principles, using that timeline as the running example, then place graph, event sourcing, and CQRS around them. By the end you'll choose a model from the *shape of the relationships in your data*, and drive the *"core entities"* step of an interview quickly and with reasons.
 
@@ -44,9 +44,9 @@ Store *"Washington, DC"* in one place, give it an ID, and everywhere else store 
 
 **That is the entire tension of data modeling in one example.**
 
-- **Normalization:** Storing information in exactly one place and referring to it by ID is called **normalization** [p. 72]; duplicating it so it's readable on the spot is **denormalization** [p. 72].
+- **Normalization:** Storing information in exactly one place and referring to it by ID is called **normalization** <abbr title="[p. 72]">[i]</abbr>; duplicating it so it's readable on the spot is **denormalization** <abbr title="[p. 72]">[i]</abbr>.
 - Normalized data is cheaper to write and can never disagree with itself; denormalized data is cheaper to read because the answer is already assembled.
-- **The join:** The lookup that option two forces — resolving an ID back into the real data — is, in a relational database, a **join** [p. 72].
+- **The join:** The lookup that option two forces — resolving an ID back into the real data — is, in a relational database, a **join** <abbr title="[p. 72]">[i]</abbr>.
 
 **Now zoom out. Real data is not one fact; it's facts *related* to other facts.**
 
@@ -66,14 +66,14 @@ Store *"Washington, DC"* in one place, give it an ID, and everywhere else store 
 **Start with why this is annoying at all.**
 
 - Most application code is object-oriented — data lives as objects with nested objects and lists.
-- Relational databases store data as **relations**: tables, unordered collections of rows [p. 67], a model Codd proposed in 1970 that became the default for structured data by the mid-1980s [p. 67].
-- **Impedance mismatch:** Objects don't slot cleanly into rows; bridging the two takes an awkward translation layer, a friction so recognized it has a name from electronics — the **impedance mismatch** [p. 68].
+- Relational databases store data as **relations**: tables, unordered collections of rows <abbr title="[p. 67]">[i]</abbr>, a model Codd proposed in 1970 that became the default for structured data by the mid-1980s <abbr title="[p. 67]">[i]</abbr>.
+- **Impedance mismatch:** Objects don't slot cleanly into rows; bridging the two takes an awkward translation layer, a friction so recognized it has a name from electronics — the **impedance mismatch** <abbr title="[p. 68]">[i]</abbr>.
 
 **ORMs help but leak.**
 
-- Tools called ORMs (object-relational mappers, like Hibernate or ActiveRecord) automate that translation's boilerplate [p. 68].
+- Tools called ORMs (object-relational mappers, like Hibernate or ActiveRecord) automate that translation's boilerplate <abbr title="[p. 68]">[i]</abbr>.
 - They help but leak: they can't fully hide the two models, and they make it easy to write inefficient queries — inviting the classic **N+1 query problem**.
-- Ask an ORM for N posts, then in a loop touch each post's author, and you may silently issue one query for the posts plus one per post for its author: N+1 round-trips where a single join would do [p. 68].
+- Ask an ORM for N posts, then in a loop touch each post's author, and you may silently issue one query for the posts plus one per post for its author: N+1 round-trips where a single join would do <abbr title="[p. 68]">[i]</abbr>.
 - Hold onto that phrase; it's a favorite interview probe, and the *deliberate* version of the same pattern turns out to be sometimes correct.
 
 ### 🌳 One-to-many is a tree, and trees like documents
@@ -81,17 +81,17 @@ Store *"Washington, DC"* in one place, give it an ID, and everywhere else store 
 **Take a résumé — the LinkedIn kind.**
 
 - One person has several jobs, schools, contact methods. Each is a **one-to-many** relationship: one user, many positions.
-- In a relational schema you split these into separate tables — `positions`, `education`, `contact_info` — each carrying a foreign key back to the `users` row [p. 69], so assembling a full profile means several queries or a multi-way join.
+- In a relational schema you split these into separate tables — `positions`, `education`, `contact_info` — each carrying a foreign key back to the `users` row <abbr title="[p. 69]">[i]</abbr>, so assembling a full profile means several queries or a multi-way join.
 
 **Express the same résumé as a single JSON document and something clicks:**
 
-the positions are a nested array *inside* the user object, education another array, the whole profile one document fetched in one shot [p. 69–70]. This maps far more closely to the object in your application code, and it has better **locality** — every piece you need sits in one place, so the read is faster and the code simpler [p. 71]. The fit is clean for a structural reason: a one-to-many relationship *is* a tree, and JSON makes the tree explicit [p. 71].
+the positions are a nested array *inside* the user object, education another array, the whole profile one document fetched in one shot <abbr title="[p. 69–70]">[i]</abbr>. This maps far more closely to the object in your application code, and it has better **locality** — every piece you need sits in one place, so the read is faster and the code simpler <abbr title="[p. 71]">[i]</abbr>. The fit is clean for a structural reason: a one-to-many relationship *is* a tree, and JSON makes the tree explicit <abbr title="[p. 71]">[i]</abbr>.
 
-This is the document model's home turf. When your data is a tree you load all at once, it's a genuinely good fit, and shredding that tree across many relational tables produces cumbersome schemas and fiddly code [p. 80].
+This is the document model's home turf. When your data is a tree you load all at once, it's a genuinely good fit, and shredding that tree across many relational tables produces cumbersome schemas and fiddly code <abbr title="[p. 80]">[i]</abbr>.
 
 <div style="border-left:4px solid #15448e;background:rgba(21,68,142,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
 
-**"One-to-many" is really "one-to-few."** Embedding works because a résumé has a *handful* of jobs. The moment the "many" is genuinely large — the thousands of comments under a celebrity's post — cramming them all into one document becomes unwieldy, and the relational approach wins [p. 71]. The number of related items, not the relationship's name, decides whether embedding is wise.
+**"One-to-many" is really "one-to-few."** Embedding works because a résumé has a *handful* of jobs. The moment the "many" is genuinely large — the thousands of comments under a celebrity's post — cramming them all into one document becomes unwieldy, and the relational approach wins <abbr title="[p. 71]">[i]</abbr>. The number of related items, not the relationship's name, decides whether embedding is wise.
 
 </div>
 
@@ -99,41 +99,41 @@ This is the document model's home turf. When your data is a tree you load all at
 
 **Return to the Alice's-city problem, now with vocabulary.**
 
-- Storing `region_id` instead of the literal `"Washington, DC"` is a normalization choice, and it buys real things: consistent spelling, no ambiguity between two places with the same name, one-place updates, easier localization, and better search — the ID can encode facts like *"Washington is on the East Coast"* that a raw string can't [p. 72].
-- An ID never has to change, precisely because it carries no human meaning; duplicated readable data, by contrast, must be rewritten everywhere it appears, costing more writes, more disk, and — worst — risking inconsistency if an update is missed [p. 72].
-- The price of normalization is the lookup: to *show* a record you resolve its IDs back to readable values, which in a relational database is a join [p. 72].
+- Storing `region_id` instead of the literal `"Washington, DC"` is a normalization choice, and it buys real things: consistent spelling, no ambiguity between two places with the same name, one-place updates, easier localization, and better search — the ID can encode facts like *"Washington is on the East Coast"* that a raw string can't <abbr title="[p. 72]">[i]</abbr>.
+- An ID never has to change, precisely because it carries no human meaning; duplicated readable data, by contrast, must be rewritten everywhere it appears, costing more writes, more disk, and — worst — risking inconsistency if an update is missed <abbr title="[p. 72]">[i]</abbr>.
+- The price of normalization is the lookup: to *show* a record you resolve its IDs back to readable values, which in a relational database is a join <abbr title="[p. 72]">[i]</abbr>.
 
 **So a join is not overhead to be feared** — it is what makes normalization affordable, letting you keep one clean copy of every fact and still assemble a readable view on demand.
 
-- Document databases historically had weak join support (some have none, forcing application-side joins; MongoDB offers a `$lookup` operator) [p. 73] — a large part of *why* document data tends to be denormalized: without a cheap join, staying normalized is inconvenient, so people duplicate instead.
+- Document databases historically had weak join support (some have none, forcing application-side joins; MongoDB offers a `$lookup` operator) <abbr title="[p. 73]">[i]</abbr> — a large part of *why* document data tends to be denormalized: without a cheap join, staying normalized is inconvenient, so people duplicate instead.
 
 The general principle, worth memorizing:
 
-> Normalized data is usually **faster to write** (one copy) but **slower to query** (needs joins); denormalized data is usually **faster to read** (fewer joins) but **more expensive to write** (more copies to keep in sync) [p. 74].
+> Normalized data is usually **faster to write** (one copy) but **slower to query** (needs joins); denormalized data is usually **faster to read** (fewer joins) but **more expensive to write** (more copies to keep in sync) <abbr title="[p. 74]">[i]</abbr>.
 
 **And the sting in the tail: denormalized data is *derived* data.**
 
-- The copies don't maintain themselves — you need a process to keep them consistent, and if it crashes mid-update you can be left with copies that disagree [p. 74].
-- Atomic transactions make this safer, but not every database offers atomicity across multiple documents, so the burden sometimes lands on you [p. 74].
+- The copies don't maintain themselves — you need a process to keep them consistent, and if it crashes mid-update you can be left with copies that disagree <abbr title="[p. 74]">[i]</abbr>.
+- Atomic transactions make this safer, but not every database offers atomicity across multiple documents, so the burden sometimes lands on you <abbr title="[p. 74]">[i]</abbr>.
 
 ### 📰 The X/Twitter timeline: denormalization done right
 
 **Now the running example pays off.**
 
-- X's home timeline is the canonical case of *deliberate* denormalization: a materialized timeline is nothing more than a **cache of the posts-follows join** from the top of this lesson, precomputed and stored so reads don't recompute it [p. 74].
-- When you post, a fan-out process pushes an entry into your followers' materialized timelines, keeping the denormalized representation up to date [p. 74].
+- X's home timeline is the canonical case of *deliberate* denormalization: a materialized timeline is nothing more than a **cache of the posts-follows join** from the top of this lesson, precomputed and stored so reads don't recompute it <abbr title="[p. 74]">[i]</abbr>.
+- When you post, a fan-out process pushes an entry into your followers' materialized timelines, keeping the denormalized representation up to date <abbr title="[p. 74]">[i]</abbr>.
 
 **Here's the senior-level detail interviewers love. What does that stored entry contain?**
 
-- Not the post text — only the **post ID, the poster's user ID, and a little extra** [p. 74–75].
-- Reading a timeline therefore still performs *two joins*: one hydrating each post ID into its content and stats, another hydrating each sender ID into profile details like name and avatar [p. 74–75].
-- *"Hydrating the IDs"* is just a join done in application code — the exact N+1-shaped pattern from earlier, except here it's the *right* call [p. 75].
+- Not the post text — only the **post ID, the poster's user ID, and a little extra** <abbr title="[p. 74–75]">[i]</abbr>.
+- Reading a timeline therefore still performs *two joins*: one hydrating each post ID into its content and stats, another hydrating each sender ID into profile details like name and avatar <abbr title="[p. 74–75]">[i]</abbr>.
+- *"Hydrating the IDs"* is just a join done in application code — the exact N+1-shaped pattern from earlier, except here it's the *right* call <abbr title="[p. 75]">[i]</abbr>.
 
 **Why store only IDs when the whole point was to precompute?**
 
-Because the referenced data is **fast-changing** — like counts and profile photos change constantly — so baking it into thirty million timelines would be instantly stale *and* explode storage [p. 75]. IDs are stable; the mutable data stays in one place, joined at read time. That hydration parallelizes well, its cost independent of follower count — which is why read-time joins are *not* inherently an obstacle to a scalable service [p. 75].
+Because the referenced data is **fast-changing** — like counts and profile photos change constantly — so baking it into thirty million timelines would be instantly stale *and* explode storage <abbr title="[p. 75]">[i]</abbr>. IDs are stable; the mutable data stays in one place, joined at read time. That hydration parallelizes well, its cost independent of follower count — which is why read-time joins are *not* inherently an obstacle to a scalable service <abbr title="[p. 75]">[i]</abbr>.
 
-> The lesson: normalization and denormalization are neither good nor bad. The most scalable design often **denormalizes some things and normalizes others** — here, denormalize *which posts* are in your timeline, but keep post content and profile data normalized and join on read [p. 75].
+> The lesson: normalization and denormalization are neither good nor bad. The most scalable design often **denormalizes some things and normalizes others** — here, denormalize *which posts* are in your timeline, but keep post content and profile data normalized and join on read <abbr title="[p. 75]">[i]</abbr>.
 
 Here is the same profile-and-timeline data under both shapes:
 
@@ -181,66 +181,66 @@ The normalized side keeps every fact once and pays joins to reassemble a view. T
 
 **The document model shines on trees, but not everything is a tree.**
 
-`region_id` was a **many-to-one** relationship — many people live in one region [p. 75]. Introduce organizations and schools that many people reference and you get **many-to-many**: a person works at several organizations, an organization has many employees [p. 75]. These do *not* fit neatly inside one self-contained document, and they push you back toward a normalized, relational shape [p. 76].
+`region_id` was a **many-to-one** relationship — many people live in one region <abbr title="[p. 75]">[i]</abbr>. Introduce organizations and schools that many people reference and you get **many-to-many**: a person works at several organizations, an organization has many employees <abbr title="[p. 75]">[i]</abbr>. These do *not* fit neatly inside one self-contained document, and they push you back toward a normalized, relational shape <abbr title="[p. 76]">[i]</abbr>.
 
 **In the relational model, a many-to-many relationship is an associative table (join table):**
 
-each row pairs one user ID with one organization ID [p. 75]. In the document model you're forced to store *references* to other documents instead of nesting — re-inventing the relational approach inside JSON [p. 76]. And such relationships usually need querying **in both directions** (*"who works here?"* and *"where does this person work?"*). Storing the reference on both sides denormalizes it — now in two places, able to drift — whereas a normalized representation stores it once and leans on secondary indexes to answer both directions efficiently [p. 76].
+each row pairs one user ID with one organization ID <abbr title="[p. 75]">[i]</abbr>. In the document model you're forced to store *references* to other documents instead of nesting — re-inventing the relational approach inside JSON <abbr title="[p. 76]">[i]</abbr>. And such relationships usually need querying **in both directions** (*"who works here?"* and *"where does this person work?"*). Storing the reference on both sides denormalizes it — now in two places, able to drift — whereas a normalized representation stores it once and leans on secondary indexes to answer both directions efficiently <abbr title="[p. 76]">[i]</abbr>.
 
 This is the relational model's home turf, and why *"just use a document database"* collapses for richly interconnected data. The more your data is a web of many-to-many links rather than independent trees, the more the join — and the model that makes it cheap — earns its place.
 
 ### 📐 Schema-on-read vs schema-on-write, honestly
 
-A frequently overstated advantage of document databases is being *"schemaless"* — a misleading word, since the code reading a document *always* assumes some structure. There's an implicit schema; it's just not enforced by the database [p. 80]. The honest framing is a contrast of *when* the schema is applied [p. 80]:
+A frequently overstated advantage of document databases is being *"schemaless"* — a misleading word, since the code reading a document *always* assumes some structure. There's an implicit schema; it's just not enforced by the database <abbr title="[p. 80]">[i]</abbr>. The honest framing is a contrast of *when* the schema is applied <abbr title="[p. 80]">[i]</abbr>:
 
-- **Schema-on-write** — explicit, enforced by the database at write time (the relational default); analogous to static (compile-time) type checking [p. 80–81].
-- **Schema-on-read** — implicit, interpreted only when the data is read (the document default); analogous to dynamic (runtime) type checking [p. 80–81].
+- **Schema-on-write** — explicit, enforced by the database at write time (the relational default); analogous to static (compile-time) type checking <abbr title="[p. 80–81]">[i]</abbr>.
+- **Schema-on-read** — implicit, interpreted only when the data is read (the document default); analogous to dynamic (runtime) type checking <abbr title="[p. 80–81]">[i]</abbr>.
 
-**Neither wins outright; it's genuinely contested [p. 81].**
+**Neither wins outright; it's genuinely contested <abbr title="[p. 81]">[i]</abbr>.**
 
 - The difference bites hardest when you *change* the data's shape.
-- In a document database you just start writing the new field and teach your reading code to cope with old documents that lack it [p. 81].
-- In a schema-on-write database you run a migration — `ALTER TABLE` to add the column (usually fast) plus, to backfill, an `UPDATE` that rewrites every row (slow on a large table, and operationally delicate to run without downtime) [p. 81].
+- In a document database you just start writing the new field and teach your reading code to cope with old documents that lack it <abbr title="[p. 81]">[i]</abbr>.
+- In a schema-on-write database you run a migration — `ALTER TABLE` to add the column (usually fast) plus, to backfill, an `UPDATE` that rewrites every row (slow on a large table, and operationally delicate to run without downtime) <abbr title="[p. 81]">[i]</abbr>.
 
 **The honest guidance:**
 
-schema-on-read genuinely helps when data is **heterogeneous** — many object types where giving each its own table is impractical, or where structure is dictated by external systems you don't control [p. 81]. When all records share one structure, an enforced schema is a *feature*: it documents and guarantees that structure for everyone [p. 81]. This matters in interviews — functional requirements are usually scoped tight enough that *"the schema keeps changing"* rarely applies, removing the main reason to reach for a document store.
+schema-on-read genuinely helps when data is **heterogeneous** — many object types where giving each its own table is impractical, or where structure is dictated by external systems you don't control <abbr title="[p. 81]">[i]</abbr>. When all records share one structure, an enforced schema is a *feature*: it documents and guarantees that structure for everyone <abbr title="[p. 81]">[i]</abbr>. This matters in interviews — functional requirements are usually scoped tight enough that *"the schema keeps changing"* rarely applies, removing the main reason to reach for a document store.
 
 ### 📍 Data locality — the real, narrow benefit
 
 **The performance argument for documents is locality:**
 
-a document is typically stored as one continuous string (JSON, or a binary form like MongoDB's BSON), so if you need the *whole* document at once, one contiguous read beats scattering the same data across many tables and index lookups [p. 82]. But the benefit is narrow and cuts both ways. It only helps when you need large parts together; loading a big document to read one field is wasteful, and updates usually rewrite the *entire* document — so large documents with frequent small updates are a bad fit, and the standing advice is to keep documents fairly small [p. 82]. Locality isn't unique to documents either: Spanner can interleave related rows inside a parent table, and Bigtable-style wide-column stores (HBase, Cassandra) use column families for the same effect [p. 82].
+a document is typically stored as one continuous string (JSON, or a binary form like MongoDB's BSON), so if you need the *whole* document at once, one contiguous read beats scattering the same data across many tables and index lookups <abbr title="[p. 82]">[i]</abbr>. But the benefit is narrow and cuts both ways. It only helps when you need large parts together; loading a big document to read one field is wasteful, and updates usually rewrite the *entire* document — so large documents with frequent small updates are a bad fit, and the standing advice is to keep documents fairly small <abbr title="[p. 82]">[i]</abbr>. Locality isn't unique to documents either: Spanner can interleave related rows inside a parent table, and Bigtable-style wide-column stores (HBase, Cassandra) use column families for the same effect <abbr title="[p. 82]">[i]</abbr>.
 
 ### 🤝 The convergence: the two models are growing together
 
 **Here's the plot twist that keeps you from tribalism.**
 
-- The relational and document models started far apart and have steadily converged [p. 83].
-- Most relational databases added JSON column types, operators, and the ability to index values *inside* a JSON document — so you can store a document-shaped tree in a relational database and query into it — while document databases (MongoDB, Couchbase, RethinkDB) added joins, secondary indexes, and declarative query languages [p. 83].
-- A relational-document *hybrid* — normalized tables for interconnected data, JSON columns for the genuinely tree-shaped, load-together parts — is a powerful combination [p. 83].
-- Codd's original 1970 model even allowed something JSON-like via *"nonsimple domains,"* so this is arguably the model returning to an old idea [p. 83].
+- The relational and document models started far apart and have steadily converged <abbr title="[p. 83]">[i]</abbr>.
+- Most relational databases added JSON column types, operators, and the ability to index values *inside* a JSON document — so you can store a document-shaped tree in a relational database and query into it — while document databases (MongoDB, Couchbase, RethinkDB) added joins, secondary indexes, and declarative query languages <abbr title="[p. 83]">[i]</abbr>.
+- A relational-document *hybrid* — normalized tables for interconnected data, JSON columns for the genuinely tree-shaped, load-together parts — is a powerful combination <abbr title="[p. 83]">[i]</abbr>.
+- Codd's original 1970 model even allowed something JSON-like via *"nonsimple domains,"* so this is arguably the model returning to an old idea <abbr title="[p. 83]">[i]</abbr>.
 - Practically: *"SQL vs NoSQL"* is a false binary; a modern PostgreSQL gives you both shapes in one database.
 
 ### 🗺️ One honest paragraph on graphs
 
-**When many-to-many connections don't just exist but *dominate*** — your data is mostly relationships, traversed many hops deep — even the join starts to strain, and it becomes natural to model the data as a **graph** [p. 84].
+**When many-to-many connections don't just exist but *dominate*** — your data is mostly relationships, traversed many hops deep — even the join starts to strain, and it becomes natural to model the data as a **graph** <abbr title="[p. 84]">[i]</abbr>.
 
-- A graph has two kinds of object: **vertices** (people, places, pages) and **edges** (relationships between them) [p. 84].
-- Social graphs, the web's link graph, and road networks are the classic examples, home to algorithms like shortest-path and PageRank [p. 84].
-- **Property graph:** The dominant flavor is the **property graph** (Neo4j, Amazon Neptune): each vertex and edge carries a label and key-value properties, any vertex can connect to any other, and you traverse forward *and* backward efficiently [p. 86–87].
-- The tell that you want one is a query traversing a **variable** number of hops — *"everyone within N degrees of this person"* — which SQL expresses clumsily (recursive CTEs) and a graph language (Cypher, SPARQL, Datalog — out of scope here) expresses in a line [p. 90–91].
+- A graph has two kinds of object: **vertices** (people, places, pages) and **edges** (relationships between them) <abbr title="[p. 84]">[i]</abbr>.
+- Social graphs, the web's link graph, and road networks are the classic examples, home to algorithms like shortest-path and PageRank <abbr title="[p. 84]">[i]</abbr>.
+- **Property graph:** The dominant flavor is the **property graph** (Neo4j, Amazon Neptune): each vertex and edge carries a label and key-value properties, any vertex can connect to any other, and you traverse forward *and* backward efficiently <abbr title="[p. 86–87]">[i]</abbr>.
+- The tell that you want one is a query traversing a **variable** number of hops — *"everyone within N degrees of this person"* — which SQL expresses clumsily (recursive CTEs) and a graph language (Cypher, SPARQL, Datalog — out of scope here) expresses in a line <abbr title="[p. 90–91]">[i]</abbr>.
 - Reality check: even relationship-heavy companies often run their core social data on relational stores, so name the graph option but don't reach for it by reflex.
 
 ### 📜 A different answer entirely: event sourcing & CQRS
 
-**Every model so far shares an assumption: you query data in roughly the same shape you wrote it. Event sourcing rejects that [p. 101].**
+**Every model so far shares an assumption: you query data in roughly the same shape you wrote it. Event sourcing rejects that <abbr title="[p. 101]">[i]</abbr>.**
 
-Instead of storing current state, you store the *log of everything that happened* — an append-only sequence of immutable, past-tense events (*"seats were booked,"* *"booking was cancelled"*), where a later cancellation is a *new* event, not an edit [p. 101, 103]. From that write-optimized log you derive whatever read-optimized views you need, each a **materialized view** (projection / read model) [p. 102]. Keeping the events as the source of truth is *event sourcing*; maintaining the derived read representations is **CQRS** (command query responsibility segregation) [p. 102].
+Instead of storing current state, you store the *log of everything that happened* — an append-only sequence of immutable, past-tense events (*"seats were booked,"* *"booking was cancelled"*), where a later cancellation is a *new* event, not an edit <abbr title="[p. 101, 103]">[i]</abbr>. From that write-optimized log you derive whatever read-optimized views you need, each a **materialized view** (projection / read model) <abbr title="[p. 102]">[i]</abbr>. Keeping the events as the source of truth is *event sourcing*; maintaining the derived read representations is **CQRS** (command query responsibility segregation) <abbr title="[p. 102]">[i]</abbr>.
 
 **The payoff is real:**
 
-events capture *intent* (*"booking cancelled"* vs a raw row mutation), the log doubles as an audit trail, and views can be deleted and recomputed to fix a bug or spun up freshly in any data model over the same events [p. 103–104]. So are the costs: processing must be deterministic (fold external facts like an exchange rate *into* the event, don't re-query a live one), and immutability collides with a right-to-be-forgotten deletion when one log mixes many users' data [p. 104]. This is only an introduction — a later patterns lesson develops it properly. For now, register it as a genuinely *different* answer to *"what is the data?"*: not a snapshot of the present, but the full history that produced it.
+events capture *intent* (*"booking cancelled"* vs a raw row mutation), the log doubles as an audit trail, and views can be deleted and recomputed to fix a bug or spun up freshly in any data model over the same events <abbr title="[p. 103–104]">[i]</abbr>. So are the costs: processing must be deterministic (fold external facts like an exchange rate *into* the event, don't re-query a live one), and immutability collides with a right-to-be-forgotten deletion when one log mixes many users' data <abbr title="[p. 104]">[i]</abbr>. This is only an introduction — a later patterns lesson develops it properly. For now, register it as a genuinely *different* answer to *"what is the data?"*: not a snapshot of the present, but the full history that produced it.
 
 ---
 
@@ -261,10 +261,10 @@ events capture *intent* (*"booking cancelled"* vs a raw row mutation), the log d
 
 Data modeling is more about shapes than arithmetic, but a few figures anchor the trade-offs:
 
-- **N+1 queries.** Fetching N items then issuing one follow-up per item is N+1 round-trips versus a single join [p. 68] — the cost is N extra network round-trips, the gap between one request and fifty. (See [Latency, Throughput, and Percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) for why serial round-trips hurt.)
+- **N+1 queries.** Fetching N items then issuing one follow-up per item is N+1 round-trips versus a single join <abbr title="[p. 68]">[i]</abbr> — the cost is N extra network round-trips, the gap between one request and fifty. (See [Latency, Throughput, and Percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) for why serial round-trips hurt.)
 - **Fan-out cost.** One post by a user with F followers is one write as a live join, but F writes if you materialize the timeline. For a celebrity, F is in the *tens of millions* — which is why the largest accounts get a hybrid: fanned-out timelines for normal users, a read-time join for the mega-accounts. *Rule of thumb, not from source:* the fan-out-on-write vs fan-out-on-read line sits around follower counts in the high thousands to millions, tuned per system.
-- **Timeline entry size.** X stores a post ID + user ID + a little extra per entry, *not* the post text [p. 74–75]. An ID is a handful of bytes; a post with media metadata is orders of magnitude larger — multiplied across every follower's timeline, that's the difference between gigabytes and petabytes.
-- **Celebrity comments.** Embedding is fine for a résumé's handful of jobs but breaks at *"thousands of comments on a celebrity's post"* — a concrete marker for when one-to-few stops being few [p. 71].
+- **Timeline entry size.** X stores a post ID + user ID + a little extra per entry, *not* the post text <abbr title="[p. 74–75]">[i]</abbr>. An ID is a handful of bytes; a post with media metadata is orders of magnitude larger — multiplied across every follower's timeline, that's the difference between gigabytes and petabytes.
+- **Celebrity comments.** Embedding is fine for a résumé's handful of jobs but breaks at *"thousands of comments on a celebrity's post"* — a concrete marker for when one-to-few stops being few <abbr title="[p. 71]">[i]</abbr>.
 
 For how to turn these into capacity estimates, see [Estimation and Numbers](/synapse/system-design-from-first-principles/foundations/estimation-and-numbers).
 
@@ -282,11 +282,11 @@ For how to turn these into capacity estimates, see [Estimation and Numbers](/syn
 
 - The pattern that keeps it sane: *keep your source of truth clean and normalized, and push denormalization into a cache or derived view.*
 - A Redis layer holding pre-computed joins in front of a normalized PostgreSQL gives fast reads without corrupting your system of record; when the derived copy drifts, you rebuild it from the clean source rather than untangling a corrupted primary.
-- (X's materialized timeline is exactly this at scale: a precomputed join kept consistent by fan-out, storing only IDs [p. 74–75].)
+- (X's materialized timeline is exactly this at scale: a precomputed join kept consistent by fan-out, storing only IDs <abbr title="[p. 74–75]">[i]</abbr>.)
 
 **Foreign keys are a trade-off at scale, not a law.**
 
-They enforce referential integrity — no post pointing at a deleted user — but the database validates them on every insert and update, so at very large scale some companies drop database-level foreign keys and enforce integrity in application code to buy write performance. Mentioning that trade-off, rather than treating foreign keys as sacred, is a senior signal. And because the two models have converged, production systems routinely mix them in one database — normalized tables for the interconnected core, JSON columns for the tree-shaped parts [p. 83]; you choose per piece of data, not per camp.
+They enforce referential integrity — no post pointing at a deleted user — but the database validates them on every insert and update, so at very large scale some companies drop database-level foreign keys and enforce integrity in application code to buy write performance. Mentioning that trade-off, rather than treating foreign keys as sacred, is a senior signal. And because the two models have converged, production systems routinely mix them in one database — normalized tables for the interconnected core, JSON columns for the tree-shaped parts <abbr title="[p. 83]">[i]</abbr>; you choose per piece of data, not per camp.
 
 ---
 
@@ -300,9 +300,9 @@ They enforce referential integrity — no post pointing at a deleted user — bu
 
 </div>
 
-**Denormalizing by reflex, then eating the consistency bug.** Duplicating a value into a hot read path feels free until the value changes and copies disagree. Denormalized data is *derived* data and needs a process to keep it in sync [p. 74]. Start normalized; denormalize only where a real access pattern demands it, and only for *stable* values — copy an ID, never a fast-changing like counter, which is why X denormalizes IDs but not counts [p. 75]. Be explicit about how copies stay consistent (a transaction, a stream processor, or a rebuildable cache) [p. 74].
+**Denormalizing by reflex, then eating the consistency bug.** Duplicating a value into a hot read path feels free until the value changes and copies disagree. Denormalized data is *derived* data and needs a process to keep it in sync <abbr title="[p. 74]">[i]</abbr>. Start normalized; denormalize only where a real access pattern demands it, and only for *stable* values — copy an ID, never a fast-changing like counter, which is why X denormalizes IDs but not counts <abbr title="[p. 75]">[i]</abbr>. Be explicit about how copies stay consistent (a transaction, a stream processor, or a rebuildable cache) <abbr title="[p. 74]">[i]</abbr>.
 
-**Calling document databases "schemaless."** They aren't — the schema is implicit and enforced by your reading code instead of the database [p. 80]. Say **schema-on-read vs schema-on-write** and you signal you understand the trade-off rather than parroting a marketing word [p. 80].
+**Calling document databases "schemaless."** They aren't — the schema is implicit and enforced by your reading code instead of the database <abbr title="[p. 80]">[i]</abbr>. Say **schema-on-read vs schema-on-write** and you signal you understand the trade-off rather than parroting a marketing word <abbr title="[p. 80]">[i]</abbr>.
 
 **Freezing on the *"core entities"* step.** This should take about two minutes. Name the nouns from the problem domain — for a Twitter-like system, `users`, `tweets`, `follows`, not abstract *"entities"* — give each a system-generated ID (not an email or other business data, which can change), sketch the foreign keys, and move on. Then tie any indexing or denormalization choice to a specific access pattern from your API — *"since we load feeds by follower and likes can be eventually consistent, I'll denormalize the like count into a derived view"* — which shows reasoning rather than pattern-matching.
 
@@ -329,14 +329,14 @@ They enforce referential integrity — no post pointing at a deleted user — bu
 <details>
 <summary>Answer: A junior engineer duplicates each user's display name into every one of their posts "to avoid the join." What breaks, and what's the disciplined alternative?</summary>
 
-Denormalized data is **derived** data: the moment the user renames themselves, every copied name must be rewritten, and any missed update leaves the data contradicting itself [p. 72, 74]. The join they avoided was cheap; the consistency bug isn't. Keep the source of truth **normalized** (the name lives once in `users`) and, if reads genuinely need to be faster, push a denormalized copy into a **cache or derived view** rebuildable from the clean source when it drifts [p. 75] — only where a real access pattern demands it, and only for values that don't change often.
+Denormalized data is **derived** data: the moment the user renames themselves, every copied name must be rewritten, and any missed update leaves the data contradicting itself <abbr title="[p. 72, 74]">[i]</abbr>. The join they avoided was cheap; the consistency bug isn't. Keep the source of truth **normalized** (the name lives once in `users`) and, if reads genuinely need to be faster, push a denormalized copy into a **cache or derived view** rebuildable from the clean source when it drifts <abbr title="[p. 75]">[i]</abbr> — only where a real access pattern demands it, and only for values that don't change often.
 
 </details>
 
 <details>
 <summary>Answer: What single question should you ask about your data before choosing between the relational and document models?</summary>
 
-*What kind of relationships dominate my data?* Mostly **one-to-many, tree-shaped, load-together** data with few inter-record links → document, for locality [p. 71, 80]. A web of **many-to-one and many-to-many** cross-references queried in multiple directions → relational, which makes those joins cheap and keeps one clean copy of each fact [p. 75–76]. The model follows the shape of the relationships — and thanks to convergence, a modern relational database can serve both shapes if needed [p. 83].
+*What kind of relationships dominate my data?* Mostly **one-to-many, tree-shaped, load-together** data with few inter-record links → document, for locality <abbr title="[p. 71, 80]">[i]</abbr>. A web of **many-to-one and many-to-many** cross-references queried in multiple directions → relational, which makes those joins cheap and keeps one clean copy of each fact <abbr title="[p. 75–76]">[i]</abbr>. The model follows the shape of the relationships — and thanks to convergence, a modern relational database can serve both shapes if needed <abbr title="[p. 83]">[i]</abbr>.
 
 </details>
 

@@ -31,9 +31,9 @@ This buys you four things at once, and it's worth naming them separately because
 - **Decoupling.** The producer doesn't know or care who consumes, how many consumers there are, or whether they're even online right now. You can add a new consumer — say, a fraud auditor — without touching the checkout code.
 - **Buffering bursts.** The flash-sale spike lands in the queue, not on the consumer's thread pool. The consumer drains it at a steady two thousand a minute; the queue depth rises and then falls. The spike is *smoothed* into a manageable, roughly constant load.
 - **Load smoothing.** Because the consumer works at its own pace, you provision it for the *average* rate, not the *peak*. That's the difference between paying for ten machines and paying for one hundred.
-- **Retries and durability.** If a consumer crashes mid-message, a good broker hands that message to someone else rather than dropping it. The broker is a database optimized for streams of messages [p. 491] — it centralizes durability so clients can connect, disconnect, and crash without losing work.
+- **Retries and durability.** If a consumer crashes mid-message, a good broker hands that message to someone else rather than dropping it. The broker is a database optimized for streams of messages <abbr title="[p. 491]">[i]</abbr> — it centralizes durability so clients can connect, disconnect, and crash without losing work.
 
-A message here is an **event**: a small, self-contained, immutable object recording that something happened at a point in time, usually carrying a timestamp [p. 488]. Producers publish events to a named **topic** (a grouping of related events, like `orders` or `clicks` [pp. 488–489]); consumers subscribe to topics.
+A message here is an **event**: a small, self-contained, immutable object recording that something happened at a point in time, usually carrying a timestamp <abbr title="[p. 488]">[i]</abbr>. Producers publish events to a named **topic** (a grouping of related events, like `orders` or `clicks` <abbr title="[pp. 488–489]">[i]</abbr>); consumers subscribe to topics.
 
 The beginner's one-sentence takeaway: *a queue lets the sender move on and the receiver catch up.* Everything below is about the two very different ways brokers implement that sentence — and why the difference decides half your design.
 
@@ -41,37 +41,37 @@ The beginner's one-sentence takeaway: *a queue lets the sender move on and the r
 
 ## ⚙️ How it works
 
-When a producer outpaces its consumers, a messaging system has exactly three options, and every design is a choice among them: **drop messages, buffer them in a queue, or apply backpressure** — flow control that blocks the producer from sending more until there's room [p. 489]. Unix pipes and TCP use backpressure with a small fixed buffer. Most brokers instead choose unbounded buffering: they let the queue grow (disk permitting) and let consumers run asynchronously, so the producer waits only for the broker to accept the message, not for anyone to process it [p. 491]. Dropping is a legitimate choice too — a metrics agent sending UDP packets happily loses the occasional reading because an approximate counter is fine [pp. 490–491] — but for anything you must not lose, dropping is off the table.
+When a producer outpaces its consumers, a messaging system has exactly three options, and every design is a choice among them: **drop messages, buffer them in a queue, or apply backpressure** — flow control that blocks the producer from sending more until there's room <abbr title="[p. 489]">[i]</abbr>. Unix pipes and TCP use backpressure with a small fixed buffer. Most brokers instead choose unbounded buffering: they let the queue grow (disk permitting) and let consumers run asynchronously, so the producer waits only for the broker to accept the message, not for anyone to process it <abbr title="[p. 491]">[i]</abbr>. Dropping is a legitimate choice too — a metrics agent sending UDP packets happily loses the occasional reading because an approximate counter is fine <abbr title="[pp. 490–491]">[i]</abbr> — but for anything you must not lose, dropping is off the table.
 
 Given that a broker buffers, two design questions remain: how do *multiple* consumers share a topic, and what happens when a consumer *crashes*? The answers split brokers into two families.
 
 ### 🔀 Family 1 — traditional message queues (AMQP/JMS style)
 
-This is the classic model behind RabbitMQ, ActiveMQ, IBM MQ, Amazon SQS, and Google Cloud Pub/Sub [pp. 491–492]. The broker tracks the state of **each individual message**. When several consumers subscribe to one topic, you can arrange them two ways [pp. 492–493]:
+This is the classic model behind RabbitMQ, ActiveMQ, IBM MQ, Amazon SQS, and Google Cloud Pub/Sub <abbr title="[pp. 491–492]">[i]</abbr>. The broker tracks the state of **each individual message**. When several consumers subscribe to one topic, you can arrange them two ways <abbr title="[pp. 492–493]">[i]</abbr>:
 
 - **Load balancing** — each message goes to *one* of the consumers, so you parallelize expensive per-message work across a pool. This is the *"competing consumers"* pattern: add more consumers, get more throughput.
 - **Fan-out** — each message goes to *every* consumer independently, so several subsystems each get their own copy of the stream.
 
-To survive consumer crashes, the broker uses **acknowledgments**. It delivers a message, waits for the consumer to signal *"done processing,"* and only then deletes it. If the ack never arrives (the consumer died mid-message), the broker redelivers that message to another consumer [p. 493]. The message is deleted on ack — **the read is destructive**. Once processed and acked, it's gone; you cannot rewind and read it again.
+To survive consumer crashes, the broker uses **acknowledgments**. It delivers a message, waits for the consumer to signal *"done processing,"* and only then deletes it. If the ack never arrives (the consumer died mid-message), the broker redelivers that message to another consumer <abbr title="[p. 493]">[i]</abbr>. The message is deleted on ack — **the read is destructive**. Once processed and acked, it's gone; you cannot rewind and read it again.
 
-That destructive read has a subtle consequence: load balancing plus redelivery inevitably **reorders** messages. If consumer 2 takes message m3, crashes, and m3 is redelivered later, it arrives *after* m4, which some other consumer already handled [p. 494]. For work items with no causal dependency between them, that's fine. When order matters, you need a separate queue per consumer — which sacrifices the load balancing.
+That destructive read has a subtle consequence: load balancing plus redelivery inevitably **reorders** messages. If consumer 2 takes message m3, crashes, and m3 is redelivered later, it arrives *after* m4, which some other consumer already handled <abbr title="[p. 494]">[i]</abbr>. For work items with no causal dependency between them, that's fine. When order matters, you need a separate queue per consumer — which sacrifices the load balancing.
 
-This family shines for **task queues / asynchronous RPC**: expensive, independent units of work where per-message parallelism matters and strict order does not [p. 529] — resize this image, transcode that video, score this transaction for fraud.
+This family shines for **task queues / asynchronous RPC**: expensive, independent units of work where per-message parallelism matters and strict order does not <abbr title="[p. 529]">[i]</abbr> — resize this image, transcode that video, score this transaction for fraud.
 
 ### 🪵 Family 2 — log-based brokers (Kafka style)
 
-Kafka, Amazon Kinesis, and (architecturally) Google Cloud Pub/Sub take the opposite stance [p. 497]. Instead of tracking each message and deleting it on ack, the broker keeps an **append-only log**: a sequence of records on disk. A producer appends to the end; a consumer reads sequentially and, on reaching the end, waits for new appends — exactly like `tail -f` on a file [p. 496]. Reading does *not* delete anything.
+Kafka, Amazon Kinesis, and (architecturally) Google Cloud Pub/Sub take the opposite stance <abbr title="[p. 497]">[i]</abbr>. Instead of tracking each message and deleting it on ack, the broker keeps an **append-only log**: a sequence of records on disk. A producer appends to the end; a consumer reads sequentially and, on reaching the end, waits for new appends — exactly like `tail -f` on a file <abbr title="[p. 496]">[i]</abbr>. Reading does *not* delete anything.
 
 **A single disk would cap throughput, so the log is sharded.**
 
-Kafka calls a shard a **partition**; a topic is a group of partitions carrying the same kind of message [p. 496]. Within a partition the broker stamps each message with a monotonically increasing **offset**. Two guarantees follow, and they are the crux of the whole model:
+Kafka calls a shard a **partition**; a topic is a group of partitions carrying the same kind of message <abbr title="[p. 496]">[i]</abbr>. Within a partition the broker stamps each message with a monotonically increasing **offset**. Two guarantees follow, and they are the crux of the whole model:
 
 1. **Messages within a partition are totally ordered.**
-2. **There is no ordering guarantee across partitions** [pp. 496–497].
+2. **There is no ordering guarantee across partitions** <abbr title="[pp. 496–497]">[i]</abbr>.
 
-Consumers are organized into **consumer groups**, which fuse load balancing and fan-out. Within one group, the partitions are divided among the group's consumers — each partition assigned to exactly one consumer — so the group as a whole load-balances. Two *separate* groups each receive every message, giving fan-out across groups [p. 493]. Crucially, the unit of parallelism is the *whole partition*, not the individual message: the number of consumers usefully sharing a topic is capped at the number of partitions [p. 497].
+Consumers are organized into **consumer groups**, which fuse load balancing and fan-out. Within one group, the partitions are divided among the group's consumers — each partition assigned to exactly one consumer — so the group as a whole load-balances. Two *separate* groups each receive every message, giving fan-out across groups <abbr title="[p. 493]">[i]</abbr>. Crucially, the unit of parallelism is the *whole partition*, not the individual message: the number of consumers usefully sharing a topic is capped at the number of partitions <abbr title="[p. 497]">[i]</abbr>.
 
-Because a consumer reads a partition strictly in order, the broker doesn't ack every message. It periodically records a single **consumer offset** — the position the consumer has processed up to. Everything below the offset is done; everything above is unseen [p. 498]. This is precisely single-leader replication in disguise: the broker is the leader, the consumer is a follower, and the offset is its log sequence number [p. 498].
+Because a consumer reads a partition strictly in order, the broker doesn't ack every message. It periodically records a single **consumer offset** — the position the consumer has processed up to. Everything below the offset is done; everything above is unseen <abbr title="[p. 498]">[i]</abbr>. This is precisely single-leader replication in disguise: the broker is the leader, the consumer is a follower, and the offset is its log sequence number <abbr title="[p. 498]">[i]</abbr>.
 
 Here's the log-based broker in one picture — three producers keyed into three partitions, and two consumer groups reading the same log at independent offsets:
 
@@ -121,9 +121,9 @@ Two independent groups reading the same partitions at different offsets is the w
 
 ### 💾 Disk, retention, and replay
 
-The log is split into **segments**; old segments are deleted or archived on a retention policy — Kafka's default is roughly seven days. So the log is a bounded, on-disk **circular buffer**: it holds a large fixed window of history and discards the oldest when full [p. 498]. As a back-of-envelope, a single 20 TB drive writing sequentially at ~250 MB/s takes about 22 hours to fill — so even one disk buffers the better part of a day's messages, and real deployments keep days to weeks [p. 499]. Many brokers now use **tiered storage**, serving old messages from cheap object storage so retention isn't bounded by local disk [p. 499].
+The log is split into **segments**; old segments are deleted or archived on a retention policy — Kafka's default is roughly seven days. So the log is a bounded, on-disk **circular buffer**: it holds a large fixed window of history and discards the oldest when full <abbr title="[p. 498]">[i]</abbr>. As a back-of-envelope, a single 20 TB drive writing sequentially at ~250 MB/s takes about 22 hours to fill — so even one disk buffers the better part of a day's messages, and real deployments keep days to weeks <abbr title="[p. 499]">[i]</abbr>. Many brokers now use **tiered storage**, serving old messages from cheap object storage so retention isn't bounded by local disk <abbr title="[p. 499]">[i]</abbr>.
 
-This retention is what makes **replay** possible, and it is the single biggest practical difference from a traditional queue. Because the offset is under the consumer's control and reads are non-destructive, you can point a consumer at yesterday's offset and reprocess everything — any number of times, with new code [pp. 499–500]. You can spin up a fresh consumer to debug production traffic without disturbing anyone else; a crashed consumer leaves behind nothing but its last offset [p. 499]. The log turns messaging into something that behaves like repeatable batch processing.
+This retention is what makes **replay** possible, and it is the single biggest practical difference from a traditional queue. Because the offset is under the consumer's control and reads are non-destructive, you can point a consumer at yesterday's offset and reprocess everything — any number of times, with new code <abbr title="[pp. 499–500]">[i]</abbr>. You can spin up a fresh consumer to debug production traffic without disturbing anyone else; a crashed consumer leaves behind nothing but its last offset <abbr title="[p. 499]">[i]</abbr>. The log turns messaging into something that behaves like repeatable batch processing.
 
 ---
 
@@ -141,7 +141,7 @@ The two families are not competitors so much as tools for different jobs. This i
 | **Slow message** | Redelivered elsewhere; others proceed | Head-of-line blocks the rest of its partition |
 | **Best for** | Expensive, independent tasks; async RPC; per-message parallelism | High throughput; ordered, fast-per-message; multiple independent consumers; replay/analytics |
 
-The rule of thumb from the source is worth quoting almost verbatim: JMS/AMQP-style brokers suit workloads where each message is expensive to process and you want message-by-message parallelism, and where ordering isn't critical; log-based brokers suit high throughput with fast per-message processing where ordering matters and you want durable, replayable, multi-subscriber delivery [p. 497].
+The rule of thumb from the source is worth quoting almost verbatim: JMS/AMQP-style brokers suit workloads where each message is expensive to process and you want message-by-message parallelism, and where ordering isn't critical; log-based brokers suit high throughput with fast per-message processing where ordering matters and you want durable, replayable, multi-subscriber delivery <abbr title="[p. 497]">[i]</abbr>.
 
 ---
 
@@ -149,10 +149,10 @@ The rule of thumb from the source is worth quoting almost verbatim: JMS/AMQP-sty
 
 A few figures anchor capacity conversations (see [Estimation & the Numbers](/synapse/system-design-from-first-principles/foundations/estimation-and-numbers) for how to wield them):
 
-- **Log buffer horizon.** One 20 TB drive at ~250 MB/s sequential write fills in ~22 hours [p. 499]. That's your worst-case *"how long can a consumer be down before it loses data"* window on a single disk — and it's why *"keep 7 days"* is comfortable, not heroic.
+- **Log buffer horizon.** One 20 TB drive at ~250 MB/s sequential write fills in ~22 hours <abbr title="[p. 499]">[i]</abbr>. That's your worst-case *"how long can a consumer be down before it loses data"* window on a single disk — and it's why *"keep 7 days"* is comfortable, not heroic.
 - **Kafka throughput, order of magnitude.** A single broker handles roughly up to a million messages/second and ~1 TB of storage, with messages kept under ~1 MB (put big blobs in object storage and pass a pointer). These are hand-wavy interview figures, not SLAs — flag them as such.
 - **Replication factor 3** is the common durability default: each partition has three copies so two nodes can fail without data loss. This ties directly back to [Replication](/synapse/system-design-from-first-principles/distributed-data/replication) — a partition is a single-leader replicated log.
-- **Partition count** is the real scaling knob and it's sticky: it caps consumer parallelism (≤ partitions per group [p. 497]) and it's awkward to change later because it changes which partition a key hashes to. Size it for peak *and* future growth.
+- **Partition count** is the real scaling knob and it's sticky: it caps consumer parallelism (≤ partitions per group <abbr title="[p. 497]">[i]</abbr>) and it's awkward to change later because it changes which partition a key hashes to. Size it for peak *and* future growth.
 
 ---
 
@@ -162,7 +162,7 @@ Real event pipelines are dominated by two systems. **Kafka** is the default log-
 
 The choice recurs across the case studies. The [ad-click aggregator](/synapse/system-design-from-first-principles/case-studies/ad-click-aggregator) puts a log-based broker at its core: clicks land in Kafka partitioned by ad ID, so all events for one ad stay ordered in one partition, and a stream processor reads them to maintain rolling counts — with replay available to recompute a window after a bug or a late correction. That partition-key choice is the whole design: pick the wrong key and you lose either ordering or the ability to parallelize. When one ad goes viral, its partition becomes a **hot partition** — a single overloaded shard while the rest sit idle — and the standard remedies are salting the key, using a compound key, or applying backpressure.
 
-The operational reality that separates the families in practice is **backpressure and lag**. In a log-based broker, a slow consumer doesn't threaten anyone else — it just falls behind, its offset trailing the head, and the only risk is falling so far behind that its offset points into a segment that's already been deleted, at which point it silently *misses* messages [p. 498]. That's why **consumer lag** (head offset minus committed offset, per partition) is the single most important metric to alarm on for any Kafka pipeline: rising lag is your early warning that a consumer can't keep up, long before it starts losing data.
+The operational reality that separates the families in practice is **backpressure and lag**. In a log-based broker, a slow consumer doesn't threaten anyone else — it just falls behind, its offset trailing the head, and the only risk is falling so far behind that its offset points into a segment that's already been deleted, at which point it silently *misses* messages <abbr title="[p. 498]">[i]</abbr>. That's why **consumer lag** (head offset minus committed offset, per partition) is the single most important metric to alarm on for any Kafka pipeline: rising lag is your early warning that a consumer can't keep up, long before it starts losing data.
 
 ---
 
@@ -171,12 +171,12 @@ The operational reality that separates the families in practice is **backpressur
 **The *"exactly-once"* myth.** This is the trap interviewers set most often. There are three honest delivery guarantees:
 
 - **At-most-once** — fire and forget. The producer sends and never retries; a lost message is simply lost. Zero duplicates, possible data loss. Fine for a metrics tick, fatal for a payment.
-- **At-least-once** — retry until acknowledged. No message is ever lost, but a message can be delivered *more than once* (the classic case: the consumer processes a message, then crashes before recording its offset, so on restart it processes that message again [p. 498]). This is the default you should assume.
+- **At-least-once** — retry until acknowledged. No message is ever lost, but a message can be delivered *more than once* (the classic case: the consumer processes a message, then crashes before recording its offset, so on restart it processes that message again <abbr title="[p. 498]">[i]</abbr>). This is the default you should assume.
 - **"Exactly-once"** — sounds ideal, and is *almost always* marketing for **at-least-once delivery plus an idempotent consumer**. The message may arrive several times; you make reprocessing harmless.
 
 <div style="border-left:4px solid #da5233;background:rgba(218,82,51,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
 
-⚠️ **True end-to-end "exactly-once delivery" is a myth.** DDIA is blunt that "effectively-once" is the more honest term [p. 527]: records *are* processed multiple times, but the visible effect is as if they weren't. Frameworks like Flink give exactly-once *for state inside the framework*, but the instant an effect leaves the boundary — a database write, an email, a call to another service — a retried task performs that side effect **twice** [p. 527]. You close the gap two ways: **atomic commit** (outputs and the offset commit together, all-or-nothing — the two-phase-commit idea kept efficient by staying inside one framework [pp. 527–528]) or, far more common in practice, **idempotence** — make the operation safe to repeat. Deleting a key is naturally idempotent; incrementing a counter is not, but you can tag each write with the message's offset and skip any offset you've already applied [p. 528]. If an interviewer says "exactly-once," your move is to ask: *delivery, or effect?* — and design for idempotent effects.
+⚠️ **True end-to-end "exactly-once delivery" is a myth.** DDIA is blunt that "effectively-once" is the more honest term <abbr title="[p. 527]">[i]</abbr>: records *are* processed multiple times, but the visible effect is as if they weren't. Frameworks like Flink give exactly-once *for state inside the framework*, but the instant an effect leaves the boundary — a database write, an email, a call to another service — a retried task performs that side effect **twice** <abbr title="[p. 527]">[i]</abbr>. You close the gap two ways: **atomic commit** (outputs and the offset commit together, all-or-nothing — the two-phase-commit idea kept efficient by staying inside one framework <abbr title="[pp. 527–528]">[i]</abbr>) or, far more common in practice, **idempotence** — make the operation safe to repeat. Deleting a key is naturally idempotent; incrementing a counter is not, but you can tag each write with the message's offset and skip any offset you've already applied <abbr title="[p. 528]">[i]</abbr>. If an interviewer says "exactly-once," your move is to ask: *delivery, or effect?* — and design for idempotent effects.
 
 </div>
 
@@ -205,11 +205,11 @@ sequenceDiagram
     B->>B: advance offset past abc
 ```
 
-**Ordering is only within a partition.** The second-most-common trap. Candidates say *"Kafka gives ordered delivery"* and stop. It gives total order *within a partition* and *none* across partitions [pp. 496–497]. If order matters for a given entity — all events for one user, one account, one ad — you must route them to the *same* partition by using a natural key (user ID, account ID) as the **partition key** [p. 498]. Get this wrong and two events for the same account can be processed out of order because they landed in different partitions.
+**Ordering is only within a partition.** The second-most-common trap. Candidates say *"Kafka gives ordered delivery"* and stop. It gives total order *within a partition* and *none* across partitions <abbr title="[pp. 496–497]">[i]</abbr>. If order matters for a given entity — all events for one user, one account, one ad — you must route them to the *same* partition by using a natural key (user ID, account ID) as the **partition key** <abbr title="[p. 498]">[i]</abbr>. Get this wrong and two events for the same account can be processed out of order because they landed in different partitions.
 
-**Poison messages and dead-letter queues.** A message that reliably crashes its consumer — a malformed record, a missing JSON field — will be redelivered, crash the consumer again, and loop forever, burning resources or, under strict ordering, blocking *all* progress behind it [pp. 494–495]. The fix is a **dead-letter queue (DLQ)**: after N failed attempts, move the poison message aside into a separate queue that's monitored, so an operator can inspect, fix, or drop it while the main flow proceeds [p. 495]. Traditional brokers like SQS have DLQs built in; with Kafka you build the retry-count-and-redirect logic yourself.
+**Poison messages and dead-letter queues.** A message that reliably crashes its consumer — a malformed record, a missing JSON field — will be redelivered, crash the consumer again, and loop forever, burning resources or, under strict ordering, blocking *all* progress behind it <abbr title="[pp. 494–495]">[i]</abbr>. The fix is a **dead-letter queue (DLQ)**: after N failed attempts, move the poison message aside into a separate queue that's monitored, so an operator can inspect, fix, or drop it while the main flow proceeds <abbr title="[p. 495]">[i]</abbr>. Traditional brokers like SQS have DLQs built in; with Kafka you build the retry-count-and-redirect logic yourself.
 
-**Head-of-line blocking.** In a log-based broker, one slow message stalls every message behind it in the same partition [p. 497], because a partition is consumed strictly in order. If a few slow items can't be allowed to hold up everything else, that's an argument for a traditional queue (which redelivers the slow one elsewhere and moves on) or for more partitions.
+**Head-of-line blocking.** In a log-based broker, one slow message stalls every message behind it in the same partition <abbr title="[p. 497]">[i]</abbr>, because a partition is consumed strictly in order. If a few slow items can't be allowed to hold up everything else, that's an argument for a traditional queue (which redelivers the slow one elsewhere and moves on) or for more partitions.
 
 ---
 
@@ -234,13 +234,13 @@ sequenceDiagram
 <details>
 <summary>Why does a log-based broker let you run a throwaway debugging consumer against production traffic without risk, when a traditional queue does not?</summary>
 
-Because reads in a log-based broker are **non-destructive** and each consumer group tracks its **own** offset. A new debug consumer joins as its own group, reads from whatever offset it likes (even offset 0), and advances only its own position — it never removes messages or affects other consumers' progress; a crash leaves behind only its offset [p. 499]. In a traditional queue, reading and acking a message *deletes* it, so a second consumer competing on the same queue would steal messages from the real consumer, and you cannot re-read what's already gone [p. 495].
+Because reads in a log-based broker are **non-destructive** and each consumer group tracks its **own** offset. A new debug consumer joins as its own group, reads from whatever offset it likes (even offset 0), and advances only its own position — it never removes messages or affects other consumers' progress; a crash leaves behind only its offset <abbr title="[p. 499]">[i]</abbr>. In a traditional queue, reading and acking a message *deletes* it, so a second consumer competing on the same queue would steal messages from the real consumer, and you cannot re-read what's already gone <abbr title="[p. 495]">[i]</abbr>.
 </details>
 
 <details>
 <summary>Your consumer's lag on one partition is climbing steadily while the others stay flat. What's likely happening, and what are your levers?</summary>
 
-One partition is receiving disproportionate traffic — a **hot partition**, usually because the partition key is skewed (one viral ad, one whale account). The consumer assigned to it can't keep up, so its committed offset falls further behind the head. Levers: change the partition key to spread the hot entity (salting, or a compound key), add partitions and rebalance (costly and changes key→partition mapping going forward), scale up the single overloaded consumer, or apply backpressure upstream. What you *cannot* do is add more consumers to the same group to help with that one partition — a partition is consumed by exactly one consumer per group [p. 497].
+One partition is receiving disproportionate traffic — a **hot partition**, usually because the partition key is skewed (one viral ad, one whale account). The consumer assigned to it can't keep up, so its committed offset falls further behind the head. Levers: change the partition key to spread the hot entity (salting, or a compound key), add partitions and rebalance (costly and changes key→partition mapping going forward), scale up the single overloaded consumer, or apply backpressure upstream. What you *cannot* do is add more consumers to the same group to help with that one partition — a partition is consumed by exactly one consumer per group <abbr title="[p. 497]">[i]</abbr>.
 </details>
 
 ---

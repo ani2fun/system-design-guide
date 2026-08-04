@@ -169,7 +169,7 @@ Edge functions are constrained — tight CPU and memory limits, short execution 
 ## 🔢 Numbers that matter
 
 - **The physics floor.** ~200,000 km/s in fiber; a round trip grows ~1 ms per ~100 km, so an intra-metro edge (<1 ms) versus a cross-ocean origin (80+ ms) is a 50–100× latency gap you cannot close any other way.
-- **Tail delay is worse than the mean.** Cross-region round trips have reached several *minutes* at high percentiles, and even intra-datacenter delay can exceed a minute during a switch reconfiguration [p. 350]. A cache miss exposes the user to the origin's whole tail; serving from the edge caps the tail your users see.
+- **Tail delay is worse than the mean.** Cross-region round trips have reached several *minutes* at high percentiles, and even intra-datacenter delay can exceed a minute during a switch reconfiguration <abbr title="[p. 350]">[i]</abbr>. A cache miss exposes the user to the origin's whole tail; serving from the edge caps the tail your users see.
 - **Hit ratio is leverage, not vanity.** Going from a 90% to a 99% hit ratio cuts origin-bound requests roughly tenfold (10% → 1%). Since the miss path is the expensive one, hit ratio maps almost linearly onto both your latency profile and your infrastructure bill.
 - **Page fan-out multiplies everything.** One page is dozens of assets; a session is many pages. The per-asset proximity win is small alone and enormous in aggregate — which is why *"static assets on a CDN"* is the most universal optimization on the web.
 

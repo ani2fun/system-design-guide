@@ -24,7 +24,7 @@ The email column is not the primary key. So the database does the only thing it 
 
 **You can't sort the table differently to fix it** — you get one primary order, and other queries want other orders.
 
-So you keep a **second, redundant copy** of just enough data, arranged in exactly the shape this query needs: emails, sorted, each paired with a pointer back to its row. That copy is an **index**. DDIA states the mechanism precisely: *an index is an additional structure derived from the primary data; adding or removing one changes query performance but never the database's contents* [p. 116]. You trade disk space and write speed for read speed — deliberately, and only where a real query pattern justifies it.
+So you keep a **second, redundant copy** of just enough data, arranged in exactly the shape this query needs: emails, sorted, each paired with a pointer back to its row. That copy is an **index**. DDIA states the mechanism precisely: *an index is an additional structure derived from the primary data; adding or removing one changes query performance but never the database's contents* <abbr title="[p. 116]">[i]</abbr>. You trade disk space and write speed for read speed — deliberately, and only where a real query pattern justifies it.
 
 <div style="border-left:4px solid #15448e;background:rgba(21,68,142,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
 
@@ -58,7 +58,7 @@ An index must answer two kinds of question fast: *"the row where column = X"* (e
 
 **The simplest possible index is a hash map from the indexed value to the row's location.**
 
-Look up `email = 'a@b.com'`: hash the string, jump to the bucket, follow the pointer. This is the persistent-disk cousin of the in-memory hash index DDIA describes for log-structured storage — a map from key to the byte offset of the value, where a read needs no disk I/O at all if the data is already in the filesystem cache [p. 117]. Average lookup is O(1). It is the fastest thing there is for *exact-match* queries.
+Look up `email = 'a@b.com'`: hash the string, jump to the bucket, follow the pointer. This is the persistent-disk cousin of the in-memory hash index DDIA describes for log-structured storage — a map from key to the byte offset of the value, where a read needs no disk I/O at all if the data is already in the filesystem cache <abbr title="[p. 117]">[i]</abbr>. Average lookup is O(1). It is the fastest thing there is for *exact-match* queries.
 
 **But a hash deliberately scatters similar keys into unrelated buckets** — that is what makes it uniform.
 
@@ -66,28 +66,28 @@ So `email = 'a@b.com'` is instant, and `email > 'a@b.com'` or `ORDER BY email` i
 
 ### 🌲 B-tree indexes: the default, and why
 
-Almost every relational database, and many non-relational ones, indexes with a **B-tree** (or its close variant the B+ tree). DDIA calls it the standard index that was already *"ubiquitous"* within a decade of its 1970 introduction [pp. 125–126]. It earns that place because it does *both* jobs — equality and range — while staying friendly to disk.
+Almost every relational database, and many non-relational ones, indexes with a **B-tree** (or its close variant the B+ tree). DDIA calls it the standard index that was already *"ubiquitous"* within a decade of its 1970 introduction <abbr title="[pp. 125–126]">[i]</abbr>. It earns that place because it does *both* jobs — equality and range — while staying friendly to disk.
 
 **The structure.**
 
-A B-tree keeps keys **sorted** and breaks the structure into fixed-size **pages** (PostgreSQL uses 8 KiB, MySQL's InnoDB 16 KiB) [p. 125]. Each page holds many sorted keys and pointers to child pages; the number of children per page — the **branching factor** — is typically several hundred [p. 126]. A lookup starts at the root page and follows the one child pointer whose key range contains your target, down through internal pages to a **leaf page** that holds the value inline or a pointer to it [p. 126]. Because each step multiplies the reachable rows by the branching factor, the tree is shallow: it stays balanced at depth O(log n), and most databases fit in three or four levels — a four-level tree of 4 KiB pages with branching factor 500 can address up to **250 TB** [p. 127].
+A B-tree keeps keys **sorted** and breaks the structure into fixed-size **pages** (PostgreSQL uses 8 KiB, MySQL's InnoDB 16 KiB) <abbr title="[p. 125]">[i]</abbr>. Each page holds many sorted keys and pointers to child pages; the number of children per page — the **branching factor** — is typically several hundred <abbr title="[p. 126]">[i]</abbr>. A lookup starts at the root page and follows the one child pointer whose key range contains your target, down through internal pages to a **leaf page** that holds the value inline or a pointer to it <abbr title="[p. 126]">[i]</abbr>. Because each step multiplies the reachable rows by the branching factor, the tree is shallow: it stays balanced at depth O(log n), and most databases fit in three or four levels — a four-level tree of 4 KiB pages with branching factor 500 can address up to **250 TB** <abbr title="[p. 127]">[i]</abbr>.
 
 **That shallowness is the point.**
 
-A lookup in a fifty-million-row table reads perhaps three or four pages instead of scanning millions. And because keys are sorted, a range query (`created_at > '2024-01-01'`) walks to the first qualifying leaf and then scans *sideways* through sorted leaves — many B-trees add sibling pointers between leaf pages precisely so a range scan never has to climb back up to a parent [p. 128]. Equality, range, and `ORDER BY` (when the order matches the index) all fall out of the same sorted structure. That versatility — not raw speed on any one operation — is why the answer to *"which index?"* in an interview is, by default, *"a B-tree."*
+A lookup in a fifty-million-row table reads perhaps three or four pages instead of scanning millions. And because keys are sorted, a range query (`created_at > '2024-01-01'`) walks to the first qualifying leaf and then scans *sideways* through sorted leaves — many B-trees add sibling pointers between leaf pages precisely so a range scan never has to climb back up to a parent <abbr title="[p. 128]">[i]</abbr>. Equality, range, and `ORDER BY` (when the order matches the index) all fall out of the same sorted structure. That versatility — not raw speed on any one operation — is why the answer to *"which index?"* in an interview is, by default, *"a B-tree."*
 
 **The cost side is structural too.**
 
-- A B-tree updates **in place**: to insert into a full page it performs a **page split** into two half-full pages and updates the parent, which can cascade upward [pp. 126–127].
-- To survive a crash mid-split, B-tree engines write every modification first to a **write-ahead log (WAL)** — an append-only file replayed on recovery — so a single logical write becomes *at least* two physical writes: WAL then page [pp. 128, 130–131].
+- A B-tree updates **in place**: to insert into a full page it performs a **page split** into two half-full pages and updates the parent, which can cascade upward <abbr title="[pp. 126–127]">[i]</abbr>.
+- To survive a crash mid-split, B-tree engines write every modification first to a **write-ahead log (WAL)** — an append-only file replayed on recovery — so a single logical write becomes *at least* two physical writes: WAL then page <abbr title="[pp. 128, 130–131]">[i]</abbr>.
 - Hold that thought; it is the tax, made concrete.
 
 ### 📍 Where the rows live: clustered vs. heap
 
 When the index leaf hands you a *"location,"* where does it point? Two designs, and the difference shows up in every secondary-index lookup.
 
-- **Heap file + reference.** The table rows sit in a **heap** — an unordered pile in roughly insertion order — and every index (including the primary key's) stores a pointer *into* the heap. This is PostgreSQL's model. One heap, many indexes, each pointing at it [p. 133].
-- **Clustered index.** The table *is* the primary-key B-tree: the full row lives in the leaf, in primary-key order. There is no separate heap. This is InnoDB's model — the primary key is always clustered [p. 133].
+- **Heap file + reference.** The table rows sit in a **heap** — an unordered pile in roughly insertion order — and every index (including the primary key's) stores a pointer *into* the heap. This is PostgreSQL's model. One heap, many indexes, each pointing at it <abbr title="[p. 133]">[i]</abbr>.
+- **Clustered index.** The table *is* the primary-key B-tree: the full row lives in the leaf, in primary-key order. There is no separate heap. This is InnoDB's model — the primary key is always clustered <abbr title="[p. 133]">[i]</abbr>.
 
 **The consequence is secondary-index indirection.**
 
@@ -97,7 +97,7 @@ When the index leaf hands you a *"location,"* where does it point? Two designs, 
 
 <div style="border-left:4px solid #15448e;background:rgba(21,68,142,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
 
-📘 **Definition.** A **secondary index** is any index that is not the primary key — created with `CREATE INDEX`. Its values need not be unique (many rows can share an email-domain, a `status`, a `user_id`), so the engine either stores a **postings list** of row IDs per value or appends a row identifier to make each entry unique [p. 132].
+📘 **Definition.** A **secondary index** is any index that is not the primary key — created with `CREATE INDEX`. Its values need not be unique (many rows can share an email-domain, a `status`, a `user_id`), so the engine either stores a **postings list** of row IDs per value or appends a row identifier to make each entry unique <abbr title="[p. 132]">[i]</abbr>.
 
 </div>
 
@@ -107,7 +107,7 @@ When the index leaf hands you a *"location,"* where does it point? Two designs, 
 
 - You could index `user_id` and `created_at` separately, but then the planner must find all of one user's posts via one index, find all recent posts via another, intersect the two sets, and sort — a lot of work.
 - A **composite** (multicolumn) index does it in one structure by concatenating the columns into a single sorted key.
-- DDIA's image is the phone book: a **concatenated index** on `(lastname, firstname)` is sorted by last name, then by first name within each last name [p. 145].
+- DDIA's image is the phone book: a **concatenated index** on `(lastname, firstname)` is sorted by last name, then by first name within each last name <abbr title="[p. 145]">[i]</abbr>.
 
 That ordering dictates exactly which queries the index can serve — the **leftmost-prefix rule**. An index on `(a, b, c)` is a B-tree sorted by `a`, then `b`, then `c`. So it can efficiently answer a query that constrains a *prefix* of that column list, in order:
 
@@ -148,7 +148,7 @@ flowchart TD
 
 **Normally an index gets you to the row, then the engine fetches the full row** from the heap or clustered tree to read the columns you `SELECT`.
 
-If the index already contains *every* column the query touches, that second fetch is skipped entirely — the query is answered **from the index alone**. DDIA calls this a **covering index** (in PostgreSQL, an index with `INCLUDE`d columns): it stores some columns in the index itself so a query is answered without touching the table, trading extra disk space and slower writes for faster reads [p. 133]. If your feed query reads only `(user_id, created_at, like_count)` and your index covers exactly those three, the like counts come straight out of the index leaves. It is the same redundancy-for-speed bargain, dialed up: you are now copying whole columns into the index, so it grows and writes get heavier.
+If the index already contains *every* column the query touches, that second fetch is skipped entirely — the query is answered **from the index alone**. DDIA calls this a **covering index** (in PostgreSQL, an index with `INCLUDE`d columns): it stores some columns in the index itself so a query is answered without touching the table, trading extra disk space and slower writes for faster reads <abbr title="[p. 133]">[i]</abbr>. If your feed query reads only `(user_id, created_at, like_count)` and your index covers exactly those three, the like counts come straight out of the index leaves. It is the same redundancy-for-speed bargain, dialed up: you are now copying whole columns into the index, so it grows and writes get heavier.
 
 ---
 
@@ -172,8 +172,8 @@ The unifying idea: **every index is the same trade in different clothes** — sp
 
 The cost of an index is not abstract; you can put figures on it.
 
-- **Reads: scan vs. seek.** A B-tree lookup reads about **3–4 pages** regardless of table size, because the tree is 3–4 levels deep [p. 127]. A full scan reads *every* page. On a 50 M-row table that is the difference between four page reads and millions — the entire reason indexes exist.
-- **The write tax, quantified.** A B-tree write costs **at least two** physical writes — WAL then page — and a page split writes more [pp. 130–131]. Now multiply by index count: PostgreSQL routes *each* index update through the WAL, so a row with five indexes turns one logical insert into one heap write plus five index updates, each WAL-logged. This is why write throughput falls roughly linearly as you add indexes.
+- **Reads: scan vs. seek.** A B-tree lookup reads about **3–4 pages** regardless of table size, because the tree is 3–4 levels deep <abbr title="[p. 127]">[i]</abbr>. A full scan reads *every* page. On a 50 M-row table that is the difference between four page reads and millions — the entire reason indexes exist.
+- **The write tax, quantified.** A B-tree write costs **at least two** physical writes — WAL then page — and a page split writes more <abbr title="[pp. 130–131]">[i]</abbr>. Now multiply by index count: PostgreSQL routes *each* index update through the WAL, so a row with five indexes turns one logical insert into one heap write plus five index updates, each WAL-logged. This is why write throughput falls roughly linearly as you add indexes.
 - **Throughput, order-of-magnitude.** A well-tuned single PostgreSQL node on decent hardware handles roughly **~5,000 simple inserts/sec/core**, but only **~1,000–2,000 updates/sec/core once index modifications are involved** — the indexes are the difference [rule-of-thumb, hardware-dependent]. Indexed point lookups reach **tens of thousands/sec/core**. Space-wise, a secondary index can approach the size of the columns it covers; a covering index adds every included column on top.
 - **Selectivity.** An index earns its keep by *eliminating* rows. A `user_id` filter that narrows fifty million rows to twelve is fabulous; an index on a `gender` or `is_active` column with two values, where each value matches half the table, barely beats a scan — and the planner will often skip it, as we'll see next.
 
@@ -202,7 +202,7 @@ The clean B-tree-vs-hash split is a teaching device. DynamoDB uses *both* B-tree
 
 **In-memory stores change the calculus, not the principle.**
 
-When the dataset lives in RAM (Redis, Memcached, VoltDB), disk-shaped B-trees lose their reason to exist — DDIA notes the counterintuitive point that in-memory speed comes not from avoiding disk reads (the OS caches those anyway) but from avoiding the overhead of encoding data into a disk-writable form [p. 134]. Such engines lean on hash tables for O(1) key-value access and offer structures awkward on disk, like Redis's sorted sets. But the trade never disappears: even in RAM, a secondary index is a redundant, query-shaped structure you update on every write.
+When the dataset lives in RAM (Redis, Memcached, VoltDB), disk-shaped B-trees lose their reason to exist — DDIA notes the counterintuitive point that in-memory speed comes not from avoiding disk reads (the OS caches those anyway) but from avoiding the overhead of encoding data into a disk-writable form <abbr title="[p. 134]">[i]</abbr>. Such engines lean on hash tables for O(1) key-value access and offer structures awkward on disk, like Redis's sorted sets. But the trade never disappears: even in RAM, a secondary index is a redundant, query-shaped structure you update on every write.
 
 ### 🛠️ Hands-on: watch the planner choose
 

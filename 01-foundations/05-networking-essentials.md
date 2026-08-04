@@ -27,7 +27,7 @@ A second, nastier version shows up in every distributed system:
 
 - You send a payment request downstream and hear nothing for two seconds.
 - Did it fail? Did it succeed and the response was lost? Is the provider just slow, dead, or paused by garbage collection?
-- From your point of view, a lost request, a dead server, and a lost response are indistinguishable: you see the same thing — silence [p. 348].
+- From your point of view, a lost request, a dead server, and a lost response are indistinguishable: you see the same thing — silence <abbr title="[p. 348]">[i]</abbr>.
 
 Every system you design is machines talking over a network, so both problems — **latency you didn't count** and **uncertainty you can't remove** — are structural.
 
@@ -67,7 +67,7 @@ To see encapsulation happen — headers wrapping the payload layer by layer on t
 
 ### Two core intuitions
 
-- **Asynchronous packet networks.** Everything above IP inherits IP’s behavior: the internet and datacenter networks are **asynchronous packet networks**. You can send a packet, but there is no guarantee of *when* it will arrive — or *whether* it will arrive at all [p. 347]. Packets are dropped, delayed, duplicated, and reordered. Any stronger guarantee (for example TCP’s ordering) is **software compensating**, not the network becoming more reliable.
+- **Asynchronous packet networks.** Everything above IP inherits IP’s behavior: the internet and datacenter networks are **asynchronous packet networks**. You can send a packet, but there is no guarantee of *when* it will arrive — or *whether* it will arrive at all <abbr title="[p. 347]">[i]</abbr>. Packets are dropped, delayed, duplicated, and reordered. Any stronger guarantee (for example TCP’s ordering) is **software compensating**, not the network becoming more reliable.
 
 - **Kernel vs user space.** Transport and below run in the OS **kernel** — fast and efficient, but hard to change. Application protocols live in **user space** — flexible and fast‑evolving. Most interesting design choices for system designers therefore cluster at **L4 and L7**.
 
@@ -87,19 +87,19 @@ Before any application data moves, client and server perform the **three‑way h
 
 That costs one full round trip purely in setup.
 
-After the handshake, TCP does four jobs [pp. 348–349]:
+After the handshake, TCP does four jobs <abbr title="[pp. 348–349]">[i]</abbr>:
 
 - **Retransmission.** The receiver sends acknowledgments (ACKs). Missing ACKs trigger resends.
 - **Ordering.** Sequence numbers let the receiver reassemble packets in the order they were sent, even if the network reorders them.
 - **Integrity.** Checksums detect corruption in transit.
-- **Backpressure.** Flow control stops a fast sender from overwhelming a slow receiver, and congestion control prevents everyone from overwhelming the network. When you write to a socket, the OS buffers your data and decides when it can actually leave the machine [p. 349].
+- **Backpressure.** Flow control stops a fast sender from overwhelming a slow receiver, and congestion control prevents everyone from overwhelming the network. When you write to a socket, the OS buffers your data and decides when it can actually leave the machine <abbr title="[p. 349]">[i]</abbr>.
 
-Those jobs earn TCP the word *“reliable”*, but that word oversells it. TCP **cannot** promise [p. 349]:
+Those jobs earn TCP the word *“reliable”*, but that word oversells it. TCP **cannot** promise <abbr title="[p. 349]">[i]</abbr>:
 
 1. **ACK ≠ “processed”.** An ACK means the remote *kernel* buffered your bytes, not that the application read and acted on them. The application can crash with your message still sitting in its socket buffer.
 2. **No cross‑connection deduplication.** TCP suppresses duplicates only within one connection. If a connection drops, your client reconnects and resends, the remote application can see the message twice.
 3. **No progress information on failure.** When a connection dies, you do not know how much of the sent data was processed: none, some, or all.
-4. **No timing guarantee.** Retransmission time is unbounded. TCP cannot make a congested network fast; it only hides loss as extra delay [pp. 349, 354].
+4. **No timing guarantee.** Retransmission time is unbounded. TCP cannot make a congested network fast; it only hides loss as extra delay <abbr title="[pp. 349, 354]">[i]</abbr>.
 
 These limits are the technical backbone of **idempotency keys, retries, and timeout design** in later modules.
 
@@ -118,8 +118,8 @@ UDP makes the opposite trade.
 
 Why choose that? Because **retransmission only helps when late data is still valuable**.
 
-- A packet with 20 ms of call audio that arrives 500 ms late is worse than useless: players fill the gap with silence, and the “retry” is a human saying “sorry, you cut out” [p. 354].
-- Live video, game state, telemetry, and DNS lookups make the same trade: **lower latency variability** in exchange for **accepting loss** [p. 354].
+- A packet with 20 ms of call audio that arrives 500 ms late is worse than useless: players fill the gap with silence, and the “retry” is a human saying “sorry, you cut out” <abbr title="[p. 354]">[i]</abbr>.
+- Live video, game state, telemetry, and DNS lookups make the same trade: **lower latency variability** in exchange for **accepting loss** <abbr title="[p. 354]">[i]</abbr>.
 
 For interviews and designs:
 
@@ -140,7 +140,7 @@ It:
 
 **HTTP/3** is HTTP running over QUIC [web: RFC 9114].
 
-DDIA’s analysis of TCP’s limits still applies [p. 348]: QUIC is a better‑engineered set of roughly the same promises, not an escape from the unreliable network underneath.
+DDIA’s analysis of TCP’s limits still applies <abbr title="[p. 348]">[i]</abbr>: QUIC is a better‑engineered set of roughly the same promises, not an escape from the unreliable network underneath.
 
 For interviews, a good framing is:
 
@@ -321,7 +321,7 @@ Read this as a **ledger of round trips and caches**:
 
 ### Indistinguishable outcomes
 
-When you send a request and receive no response for some time T, the following are all possible [pp. 347–348]:
+When you send a request and receive no response for some time T, the following are all possible <abbr title="[pp. 347–348]">[i]</abbr>:
 
 - The request was dropped.
 - The request is still queued in the network or on the server.
@@ -355,31 +355,31 @@ The network fundamentally provides no direct way to distinguish these cases.
 
 ### Timeouts as a design choice
 
-The usual response is a **timeout**: after waiting T, you give up and assume failure — even though the work may still finish after you give up [p. 348].
+The usual response is a **timeout**: after waiting T, you give up and assume failure — even though the work may still finish after you give up <abbr title="[p. 348]">[i]</abbr>.
 
 You might wish for a formula:
 
 - If the network guaranteed a maximum delay **d**, and servers guaranteed a maximum processing time **r**, then **2d + r** would be a safe timeout.
-- Real packet networks guarantee **neither** [pp. 352–353].
+- Real packet networks guarantee **neither** <abbr title="[pp. 352–353]">[i]</abbr>.
 
 Delays are dominated by **queueing**:
 
 - switch buffers when links are congested,
 - OS queues when all cores are busy,
 - hypervisor pauses in virtualized environments,
-- TCP’s own sender‑side buffering [pp. 353–354].
+- TCP’s own sender‑side buffering <abbr title="[pp. 353–354]">[i]</abbr>.
 
-Queues grow without bound as utilization approaches capacity. That is a deliberate design trade‑off: circuit‑switched telephone networks reserved end‑to‑end bandwidth and provided bounded delay at the cost of idle capacity; packet‑switched networks were chosen because bursty data traffic gets far better utilization from sharing. **Variable delay is a cost/benefit decision, not a law of nature** [pp. 355–357].
+Queues grow without bound as utilization approaches capacity. That is a deliberate design trade‑off: circuit‑switched telephone networks reserved end‑to‑end bandwidth and provided bounded delay at the cost of idle capacity; packet‑switched networks were chosen because bursty data traffic gets far better utilization from sharing. **Variable delay is a cost/benefit decision, not a law of nature** <abbr title="[pp. 355–357]">[i]</abbr>.
 
 Timeouts are therefore a **trade‑off**, not a constant to memorize:
 
 - Too **short**: you declare slow‑but‑alive nodes dead, retry work that may have succeeded, and push load onto already‑loaded nodes — risking cascades.
-- Too **long**: users wait on truly dead nodes [p. 352].
+- Too **long**: users wait on truly dead nodes <abbr title="[p. 352]">[i]</abbr>.
 
 Mature systems:
 
 - choose timeouts **experimentally** from observed latency distributions, or
-- **adapt them continuously** (e.g., Phi Accrual failure detector in Cassandra and Akka, TCP’s own retransmission timers) [p. 355].
+- **adapt them continuously** (e.g., Phi Accrual failure detector in Cassandra and Akka, TCP’s own retransmission timers) <abbr title="[p. 355]">[i]</abbr>.
 
 Because timed‑out requests may still execute, retries in production are:
 
@@ -388,7 +388,7 @@ Because timed‑out requests may still execute, retries in production are:
 
 Sit with the underlying conclusion:
 
-> “The fact that such partial failures can occur is the defining characteristic of distributed systems.” [p. 388]
+> “The fact that such partial failures can occur is the defining characteristic of distributed systems.” <abbr title="[p. 388]">[i]</abbr>
 
 Networks drop, delay, duplicate, and reorder. Any design that assumes otherwise will fail in the tail.
 
@@ -400,8 +400,8 @@ Networks drop, delay, duplicate, and reorder. Any design that assumes otherwise 
 
 | Option   | Gives you                                                     | Costs you                                                 | Use when                                  |
 |---------|----------------------------------------------------------------|------------------------------------------------------------|-------------------------------------------|
-| TCP     | Ordering, retransmission, backpressure; universal support      | Handshake RTT; loss surfaces as delay; HOL at transport   | **Default** for almost everything [p. 349] |
-| UDP     | Minimal latency variance, no connection state, tiny header     | No delivery/ordering guarantees; you build reliability; weak browser support | Late data is worthless (voice/video, gaming, telemetry, DNS) [p. 354] |
+| TCP     | Ordering, retransmission, backpressure; universal support      | Handshake RTT; loss surfaces as delay; HOL at transport   | **Default** for almost everything <abbr title="[p. 349]">[i]</abbr> |
+| UDP     | Minimal latency variance, no connection state, tiny header     | No delivery/ordering guarantees; you build reliability; weak browser support | Late data is worthless (voice/video, gaming, telemetry, DNS) <abbr title="[p. 354]">[i]</abbr> |
 | QUIC    | TCP‑like reliability per stream, 1‑RTT combined transport+TLS handshake, no cross‑stream HOL | Newer, less ubiquitous tooling; still runs over unreliable network | Handshake latency or multiplexed streams dominate; mobile/lossy links [web: RFC 9000] |
 
 ### Connection strategy
@@ -442,7 +442,7 @@ Headers for intuition:
 
 ### How often the network fails
 
-Empirical numbers [p. 350]:
+Empirical numbers <abbr title="[p. 350]">[i]</abbr>:
 
 - One study of a medium‑sized datacenter observed ~**12 network faults per month**, roughly half disconnecting a single machine and half a whole rack.
 - Delay tails can be extreme:
@@ -495,12 +495,12 @@ For interviews:
 
 ### Timeout tuning and retries
 
-Timeout tuning in production follows DDIA’s advice [p. 355]:
+Timeout tuning in production follows DDIA’s advice <abbr title="[p. 355]">[i]</abbr>:
 
 - measure round‑trip distributions across nodes and time,
 - set timeouts empirically, or adapt them continuously (Phi Accrual, TCP retransmission logic).
 
-In multitenant clouds, a noisy neighbor saturating shared NICs, links, or CPUs can distort your latencies with no direct visibility [pp. 354–355], making **static timeout constants age badly**.
+In multitenant clouds, a noisy neighbor saturating shared NICs, links, or CPUs can distort your latencies with no direct visibility <abbr title="[pp. 354–355]">[i]</abbr>, making **static timeout constants age badly**.
 
 Because a timed‑out request may have actually executed:
 
@@ -517,10 +517,10 @@ DNS in production is both your **cheapest availability lever** and your **slowes
 ## 🪤 Pitfalls & interview traps
 
 > ⚠️ **Trap 1: “TCP is reliable, so my request went through.”**
-> An ACK means the remote kernel buffered your bytes, not that the application processed them. The app can crash with your request still unread [p. 349].
+> An ACK means the remote kernel buffered your bytes, not that the application processed them. The app can crash with your request still unread <abbr title="[p. 349]">[i]</abbr>.
 
 > ⚠️ **Trap 2: “The timeout fired, so it failed.”**
-> A timeout means *you stopped waiting*, not that the work never completed [p. 348].
+> A timeout means *you stopped waiting*, not that the work never completed <abbr title="[p. 348]">[i]</abbr>.
 
 Together they imply two design rules used throughout this book:
 
@@ -529,7 +529,7 @@ Together they imply two design rules used throughout this book:
 
 Other common traps:
 
-- **Retrying without idempotency.** After a timeout, a reconnect‑and‑resend can double‑charge a card because TCP deduplication is per connection [p. 349]. Expect: “Your payment call timed out — what do you do next?”
+- **Retrying without idempotency.** After a timeout, a reconnect‑and‑resend can double‑charge a card because TCP deduplication is per connection <abbr title="[p. 349]">[i]</abbr>. Expect: “Your payment call timed out — what do you do next?”
 - **“HTTP/2 solved head‑of‑line blocking.”** It solved HOL at the application layer, but HOL remains at the TCP layer. Saying “moved, not solved — QUIC is the real fix” is the senior answer [web: RFC 9114].
 - **Ignoring handshake tax in microservice chains.** Five hops × fresh TLS connections per call quietly add up. Interviewers want to hear “keep‑alive and connection pools” when latency budgets are discussed.
 - **Treating DNS changes as instant failover.** Clients keep using cached IPs until TTL expiry. Always mention TTL when you propose DNS‑based failover.
@@ -573,7 +573,7 @@ On an 80 ms path, that’s roughly 320 ms cold (including DNS) vs ~80 ms warm (n
 <summary><strong>Q:</strong> Why is there no single “correct” timeout value for a service call, and what do mature systems do instead?</summary>
 
 **A:**
-A provably safe timeout of 2d + r exists only if the network has a bounded maximum delay d and servers have a bounded maximum handling time r. Packet‑switched networks bound neither: delay is dominated by queueing (switch buffers, busy CPUs, VM pauses, TCP buffering) which grows without bound near capacity, and cross‑region delays can reach minutes [pp. 350, 352–354]. Short timeouts declare slow‑but‑alive nodes dead and cause duplicate work or cascades; long ones make users wait on dead nodes [p. 352]. Mature systems measure latency distributions and set timeouts empirically or adapt them (Phi Accrual in Cassandra/Akka) [p. 355], pair retries with exponential backoff + jitter, and make mutating operations idempotent because a timed‑out attempt may still have completed.
+A provably safe timeout of 2d + r exists only if the network has a bounded maximum delay d and servers have a bounded maximum handling time r. Packet‑switched networks bound neither: delay is dominated by queueing (switch buffers, busy CPUs, VM pauses, TCP buffering) which grows without bound near capacity, and cross‑region delays can reach minutes <abbr title="[pp. 350, 352–354]">[i]</abbr>. Short timeouts declare slow‑but‑alive nodes dead and cause duplicate work or cascades; long ones make users wait on dead nodes <abbr title="[p. 352]">[i]</abbr>. Mature systems measure latency distributions and set timeouts empirically or adapt them (Phi Accrual in Cassandra/Akka) <abbr title="[p. 355]">[i]</abbr>, pair retries with exponential backoff + jitter, and make mutating operations idempotent because a timed‑out attempt may still have completed.
 
 </details>
 
@@ -581,7 +581,7 @@ A provably safe timeout of 2d + r exists only if the network has a bounded maxim
 <summary><strong>Q:</strong> Your p50 latency is 30 ms, but p99 spikes to 2 s at random times unrelated to your deploys. What network-level causes should you consider?</summary>
 
 **A:**
-Likely causes are **queueing and contention**: upstream switch/link congestion, destination host OS queues when CPUs are busy, hypervisor pauses, and TCP retransmissions turning packet loss into latency [pp. 353–354]. In a multitenant cloud, a “noisy neighbor” saturating shared links, NICs, or CPUs produces exactly this pattern, and you often have no direct visibility into their usage [pp. 354–355]. Tail latency, not median, must drive timeout and capacity decisions.
+Likely causes are **queueing and contention**: upstream switch/link congestion, destination host OS queues when CPUs are busy, hypervisor pauses, and TCP retransmissions turning packet loss into latency <abbr title="[pp. 353–354]">[i]</abbr>. In a multitenant cloud, a “noisy neighbor” saturating shared links, NICs, or CPUs produces exactly this pattern, and you often have no direct visibility into their usage <abbr title="[pp. 354–355]">[i]</abbr>. Tail latency, not median, must drive timeout and capacity decisions.
 
 </details>
 
