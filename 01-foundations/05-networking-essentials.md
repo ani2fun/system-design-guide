@@ -2,9 +2,9 @@
 title: "Networking Essentials"
 summary: "The slice of networking a system designer actually uses — TCP vs UDP, TLS and DNS costs, HTTP/2 and QUIC, connection reuse, and what an unreliable network really guarantees."
 essential: true
----
+***
 
-# 🌐 Networking Essentials
+# Networking Essentials
 
 > **Prerequisites:** [Thinking in Trade-offs](/synapse/system-design-from-first-principles/foundations/thinking-in-tradeoffs)
 > **You'll be able to:** trace every round trip in an HTTPS request and name the cache that removes each one; choose between TCP, UDP, and QUIC and defend the default; reason about timeouts on a network that guarantees nothing.
@@ -57,7 +57,7 @@ Textbooks describe seven OSI layers. In practice, people use about four, and tal
 
 \* **TLS is the awkward guest.** It sits on top of TCP and underneath HTTP, securing the pipe rather than defining application messages. Treat it as a **security layer between L4 and L7**.
 
-For a more textbook-style overview of the OSI model, see  
+For a more textbook-style overview of the OSI model, see
 [What is the OSI model? (AWS)](https://aws.amazon.com/what-is/osi-model/).
 
 To see encapsulation happen — headers wrapping the payload layer by layer on the way down, and unwrapping on the way up — step through it yourself:
@@ -103,6 +103,8 @@ Those jobs earn TCP the word *“reliable”*, but that word oversells it. TCP *
 
 These limits are the technical backbone of **idempotency keys, retries, and timeout design** in later modules.
 
+One practical wrinkle the textbook model does not show you: small writes can be delayed by TCP itself. Nagle’s algorithm coalesces tiny packets to improve efficiency, while `TCP_NODELAY` turns that behavior off when interactive latency matters.
+
 ***
 
 ### 🎙️ UDP: when late data is worthless
@@ -140,7 +142,7 @@ It:
 
 **HTTP/3** is HTTP running over QUIC [web: RFC 9114].
 
-DDIA’s analysis of TCP’s limits still applies <abbr title="[p. 348]">[i]</abbr>: QUIC is a better‑engineered set of roughly the same promises, not an escape from the unreliable network underneath.
+DDIA’s analysis of TCP’s limits still applies <abbr title="[p. 348]">[i]</abbr>: QUIC is a better‑engineered way to offer roughly the same guarantees, not an escape from the unreliable network underneath.
 
 For interviews, a good framing is:
 
@@ -166,7 +168,7 @@ The price is extra round trips before the first byte of application data:
 
 - TLS 1.2: typically **2 round trips** on top of TCP.
 - TLS 1.3: typically **1 round trip**.
-- TLS 1.3 **session resumption** lets a returning client send data in the first flight — **“0‑RTT”** — with a sharp caveat: 0‑RTT data can be **replayed** by an attacker, so it is safe only for requests you would be willing to process twice [web: RFC 8446].
+- TLS 1.3 **session resumption** lets a returning client send data in the first flight — **“0‑RTT”** — with a sharp caveat: 0‑RTT data can be **replayed** by an attacker, so only requests you are willing to process twice are safe [web: RFC 8446].
 
 Note the rhyme with TCP’s reconnect duplication problem: escaping a lost handshake is often paid for with **possible duplicates**.
 
@@ -201,11 +203,13 @@ This leads to two major design consequences:
 
 #### HTTP/1.1
 
-HTTP/1.1 allows **one outstanding request at a time per TCP connection**:
+In practice, HTTP/1.1 browsers allow **one outstanding request at a time per TCP connection**, even though the spec permits pipelining:
+
+Browsers largely disabled pipelining because head-of-line blocking and buggy intermediaries made it unreliable in production [web: RFC 2616] [web: MDN — HTTP/1.x connection management].
 
 - Response N must finish before request N+1 proceeds.
 - One slow response blocks everything queued behind it: **head‑of‑line (HOL) blocking at the application layer**.
-- Browsers work around this by opening several parallel TCP connections per host (typically about six), which multiplies handshake overhead [web: MDN — HTTP/1.x connection management].
+- Browsers work around this by opening several parallel TCP connections per host — typically on the order of six — which multiplies handshake overhead [web: MDN — HTTP/1.x connection management]. Modern browser limits vary by vendor and version, so treat \“six\” as a planning number, not a protocol rule.
 
 #### HTTP/2
 
@@ -359,7 +363,7 @@ The usual response is a **timeout**: after waiting T, you give up and assume fai
 
 You might wish for a formula:
 
-- If the network guaranteed a maximum delay **d**, and servers guaranteed a maximum processing time **r**, then **2d + r** would be a safe timeout.
+- If the network guaranteed a maximum delay **d** and servers guaranteed a maximum processing time **r**, you could pick a safe timeout of **2d + r**.
 - Real packet networks guarantee **neither** <abbr title="[pp. 352–353]">[i]</abbr>.
 
 Delays are dominated by **queueing**:
@@ -465,7 +469,7 @@ Connection pooling is ambient in real systems:
   - stale connections to rebooted backends,
   - thundering herd of re‑handshakes when a load balancer restarts and drops millions of keep‑alive connections.
 
-Rule of thumb: treat “pool exhausted” and “connection reset by peer” as **capacity signals**, not mysteries.
+Rule of thumb: treat “pool exhausted” and “connection reset by peer” as **capacity signals**, not mysteries about correctness.
 
 ### TLS termination at the edge
 
@@ -486,12 +490,13 @@ A large share of the benefit of a CDN for dynamic traffic is this **edge termina
 QUIC and HTTP/3 are real but unevenly deployed:
 
 - Major browsers and CDNs support them.
+- External web traffic now commonly uses HTTP/3 where clients and edges support it.
 - A lot of intra‑datacenter traffic still runs over TCP / HTTP/1.1 / HTTP/2.
 
 For interviews:
 
 - Knowing QUIC earns credit with performance‑minded interviewers.
-- Relying on it as the core of a design is rarely necessary.
+- Making it the core of a design is rarely necessary.
 
 ### Timeout tuning and retries
 
@@ -520,7 +525,7 @@ DNS in production is both your **cheapest availability lever** and your **slowes
 > An ACK means the remote kernel buffered your bytes, not that the application processed them. The app can crash with your request still unread <abbr title="[p. 349]">[i]</abbr>.
 
 > ⚠️ **Trap 2: “The timeout fired, so it failed.”**
-> A timeout means *you stopped waiting*, not that the work never completed <abbr title="[p. 348]">[i]</abbr>.
+> A timeout only means *you stopped waiting*, not that the work never completed <abbr title="[p. 348]">[i]</abbr>.
 
 Together they imply two design rules used throughout this book:
 

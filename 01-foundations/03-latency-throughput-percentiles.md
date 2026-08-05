@@ -86,7 +86,7 @@ That gap is why two identical requests can have wildly different response times 
 
 **Queueing is the biggest of these variance sources, and it compounds:**
 
-- a server can only process about as many things in parallel as it has CPU cores, so it takes just a few slow requests at the head of the line to hold up everything behind them — head-of-line blocking at datacenter scale.
+- for CPU-bound work, a server can only process about as many things in parallel as it has CPU cores; an I/O-bound server can hold far more requests in flight than it has cores, because most of them are blocked waiting on the network or disk rather than running `[web: Eli Bendersky — Concurrent Servers, Part 2: Threads]`. Either way, it takes just a few slow requests at the head of the line to hold up everything behind them — head-of-line blocking at datacenter scale.
 - The delayed requests *feel* slow to their clients while looking fast in the server's own accounting, which is exactly why response time must be measured **on the client side** <abbr title="(p. 39)">[i]</abbr>.
 
 ### 📉 Throughput, and the cliff at the edge of capacity
@@ -105,6 +105,12 @@ For a given hardware footprint there is a maximum throughput, and response time 
 
 - requests per second, gigabytes of new data per day, checkouts per hour — sometimes as a peak rather than an average (simultaneously online users), plus shape parameters like the read/write ratio, cache hit rate, or data items per user <abbr title="(p. 50)">[i]</abbr>.
 - Two questions then frame every scaling discussion: with fixed resources, how does performance degrade as load grows? And to hold performance constant, how much must resources grow <abbr title="(p. 50)">[i]</abbr>?
+
+**One formula ties throughput, latency, and concurrency together: Little's Law.**
+
+- Little's Law says that the average number of requests a system holds in flight at any instant equals the arrival rate multiplied by the average time each request spends in the system: *L = λ × W* `[web: J.D.C. Little — A Proof for the Queuing Formula L = λW]`.
+- Worked example: a service handling λ = 2,000 requests/second with an average response time W = 60 ms (0.06 s) holds L = 2,000 × 0.06 = **120 requests in flight** at any moment — that is the minimum thread-pool, connection-pool, or event-loop capacity the service needs before adding any safety margin.
+- The same formula is why a growing tail is a capacity problem, not just a user-experience one: if p99 grows from 60 ms to 600 ms while throughput holds steady, the number of requests the system must hold in flight grows tenfold too, and undersized pools start rejecting or queueing work that used to fit comfortably.
 
 ### 📊 Percentiles: reading the distribution
 
@@ -207,15 +213,15 @@ Anchor figures to carry into any design discussion — the estimation method tha
 | Amazon's internal latency bar | p999 (1 in 1,000), because slow requests hit the biggest accounts | DDIA2 pp. 40–41 |
 | Percentile Amazon rejected | p9999 — too costly, diminishing returns | DDIA2 p. 41 |
 | A well-formed SLO | median < 200 ms; p99 < 1 s; ≥ 99.9% non-error | DDIA2 pp. 41–42 |
-| Same-region network round trip | 1–2 ms | Reference figure |
-| Cross-region round trip | 50–150 ms | Reference figure |
-| In-memory cache read | < 1 ms | Reference figure |
-| DB read, cached / disk | 1–5 ms / 5–30 ms; commit 5–15 ms | Reference figure |
-| Message-queue hop, in-region | 1–5 ms end-to-end | Reference figure |
+| Same-region network round trip | 1–2 ms | `[web: Colin Scott — Latency Numbers Every Programmer Should Know]` |
+| Cross-region round trip | 50–150 ms | `[web: Colin Scott — Latency Numbers Every Programmer Should Know]` |
+| In-memory cache read | < 1 ms | `[web: Colin Scott — Latency Numbers Every Programmer Should Know]` |
+| DB read, cached / disk | 1–5 ms / 5–30 ms; commit 5–15 ms | Rule of thumb, not from source |
+| Message-queue hop, in-region | 1–5 ms end-to-end | Rule of thumb, not from source |
 
 **And the famous *"latency costs revenue"* figures deserve honest handling**, because DDIA2's own sidebar shows the much-cited data is shaky <abbr title="(all p. 41)">[i]</abbr>:
 
-a 2006 Google claim (400→900 ms slowdown ≈ 20% traffic/revenue drop) is contradicted by Google's more careful 2009 experiment (400 ms added latency ≈ only 0.6% fewer searches per day); Bing's 2009 experiment found a 2 s slowdown cut ad revenue by 4.3%; an Akamai study claiming 100 ms ≈ up to 7% lower conversion undermines itself (its fastest pages were often near-empty error pages, which also convert poorly); and a Yahoo study that *did* control for result quality found ≥ 1.25 s of speed difference produced 20–30% more clicks on the fast side.
+a 2006 Google claim found that a 400→900 ms slowdown cut traffic and revenue by roughly 20%. Google's more careful 2009 experiment contradicts that figure: it found that 400 ms of added latency cost only about 0.6% fewer searches per day. Bing's 2009 experiment told a different story again — a 2-second slowdown cut ad revenue by 4.3%. An Akamai study claiming 100 ms of latency costs up to 7% of conversions undermines itself, because its fastest pages were often near-empty error pages, which also convert poorly. A Yahoo study that did control for result quality found that ≥ 1.25 s of speed difference produced 20–30% more clicks on the fast side.
 
 Latency clearly matters; no single magic number survives scrutiny. Quote the spread, not a slogan — and measure your own funnel.
 
@@ -329,7 +335,12 @@ Measuring latency honestly is harder than it looks — these are the tools and t
   averaging that hides the tail. Ports exist for most languages.
 - [How NOT to Measure Latency](https://www.infoq.com/presentations/latency-response-time/) — Gil
   Tene's talk on *coordinated omission*, the single most common way a percentile number quietly
-  lies about the system it claims to describe.
+  lies about the system it claims to describe. The mechanism: a closed-loop load generator waits
+  for each response before sending the next request, so a stall doesn't get recorded as one slow
+  measurement — it gets recorded as *no measurement at all* for the requests that would have
+  arrived during the stall. The load generator quietly deletes the worst data points from the
+  sample, and the reported percentiles look far better than what real, open-loop traffic would
+  have experienced `[web: Gil Tene — How NOT to Measure Latency, InfoQ]`.
 - [Latency Numbers Every Programmer Should Know, interactive](https://colin-scott.github.io/personal_website/research/interactive_latency.html)
   — the same constants this lesson uses, adjustable by year so you can watch which ones actually
   improved.
@@ -342,3 +353,7 @@ Measuring latency honestly is harder than it looks — these are the tools and t
 - DDIA2 ch. 2 p. 38 (retry storms, metastable failure, overload mitigations); pp. 49–52 (describing load; two lenses on rising load).
 - DDIA2 ch. 2 p. 41 (latency-vs-revenue studies: Google 2006/2009, Bing 2009, Akamai, Yahoo — reliability caveats as given in the source).
 - [web: Google SRE Book, *"Service Level Objectives"*] — the term *SLI* only; all SLO/SLA substance from DDIA2.
+- [web: J.D.C. Little — A Proof for the Queuing Formula L = λW, Operations Research, 1961] — Little's Law statement and the concurrency worked example.
+- [web: Colin Scott — Latency Numbers Every Programmer Should Know] — same-region/cross-region round trip and in-memory cache-read reference figures. The DB-read and message-queue rows in "Numbers that matter" are not from this or any other cited source — marked `Rule of thumb, not from source` per house style rather than left as an unsupported "Reference figure."
+- [web: Gil Tene — How NOT to Measure Latency, InfoQ] — the coordinated-omission mechanism.
+- [web: Eli Bendersky — Concurrent Servers, Part 2: Threads] — CPU-bound vs. I/O-bound concurrency scope note.
