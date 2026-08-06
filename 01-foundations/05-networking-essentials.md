@@ -2,14 +2,14 @@
 title: "Networking Essentials"
 summary: "The slice of networking a system designer actually uses — TCP vs UDP, TLS and DNS costs, HTTP/2 and QUIC, connection reuse, and what an unreliable network really guarantees."
 essential: true
-***
+---
 
 # Networking Essentials
 
 > **Prerequisites:** [Thinking in Trade-offs](/synapse/system-design-from-first-principles/foundations/thinking-in-tradeoffs)
 > **You'll be able to:** trace every round trip in an HTTPS request and name the cache that removes each one; choose between TCP, UDP, and QUIC and defend the default; reason about timeouts on a network that guarantees nothing.
 
-***
+---
 
 ## 🧨 The problem
 
@@ -33,7 +33,7 @@ Every system you design is machines talking over a network, so both problems —
 
 > This lesson covers the slice of networking a designer actually uses, and ends with the truth that shapes all distributed thinking: the network guarantees you *nothing*.
 
-***
+---
 
 ## 🧅 Intuition: layering
 
@@ -71,7 +71,7 @@ To see encapsulation happen — headers wrapping the payload layer by layer on t
 
 - **Kernel vs user space.** Transport and below run in the OS **kernel** — fast and efficient, but hard to change. Application protocols live in **user space** — flexible and fast‑evolving. Most interesting design choices for system designers therefore cluster at **L4 and L7**.
 
-***
+---
 
 ## ⚙️ Architecture: how the main pieces work
 
@@ -105,7 +105,7 @@ These limits are the technical backbone of **idempotency keys, retries, and time
 
 One practical wrinkle the textbook model does not show you: small writes can be delayed by TCP itself. Nagle’s algorithm coalesces tiny packets to improve efficiency, while `TCP_NODELAY` turns that behavior off when interactive latency matters.
 
-***
+---
 
 ### 🎙️ UDP: when late data is worthless
 
@@ -128,7 +128,7 @@ For interviews and designs:
 - The **default** is TCP — so much so that it often goes unmentioned.
 - Reach for UDP only when you can clearly explain **why stale data is worthless** *and* how you handle **browser clients**, which expose UDP essentially only via WebRTC.
 
-***
+---
 
 ### ⚡ QUIC and HTTP/3
 
@@ -155,7 +155,7 @@ Mention QUIC when:
 
 Then spend your detailed design time on other fundamentals.
 
-***
+---
 
 ### 🔒 TLS: securing the channel
 
@@ -177,7 +177,7 @@ Scope honesty:
 - TLS **encrypts the pipe**. It does **not** make the contents trustworthy.
 - An HTTPS request is still attacker‑controlled input; you must validate it server‑side.
 
-***
+---
 
 ### 📇 DNS: names, addresses, and TTL
 
@@ -197,7 +197,7 @@ This leads to two major design consequences:
 
 - **Change propagation is TTL‑bounded.** Your configuration changes propagate no faster than the TTL. A “DNS failover” with a 300‑second TTL means up to **five minutes** of clients faithfully trying the old, possibly dead, address. Low TTLs buy agility but reduce cache efficiency; that tension is the key DNS trade‑off.
 
-***
+---
 
 ### 🚧 HTTP/1.1 vs HTTP/2: head‑of‑line blocking
 
@@ -230,7 +230,7 @@ This residue is exactly what QUIC removes with per‑stream independence over UD
 
 > General lesson: fixing a bottleneck at one layer often reveals the same bottleneck one layer down.
 
-***
+---
 
 ### ♻️ Connection reuse: compounding handshake costs
 
@@ -268,7 +268,7 @@ The catch: a persistent connection is **shared state** at both ends. At scale, y
 - detect dead ones, and
 - manage millions of long‑lived connections (for example WebSockets) where connection state dominates the design.
 
-***
+---
 
 ## 🧭 Data flow: fetching a URL end‑to‑end
 
@@ -319,7 +319,7 @@ Read this as a **ledger of round trips and caches**:
 - **HTTP request/response:** 1 round trip plus server processing — irreducible, unless you move the server closer (CDN/edge) or cache the response.
 - **Connection teardown** (FIN/ACK) happens eventually, but clients do not wait for it.
 
-***
+---
 
 ## 🕳️ Failure modes: what the network actually guarantees
 
@@ -396,7 +396,7 @@ Sit with the underlying conclusion:
 
 Networks drop, delay, duplicate, and reorder. Any design that assumes otherwise will fail in the tail.
 
-***
+---
 
 ## ⚖️ Key trade‑offs
 
@@ -416,7 +416,7 @@ Networks drop, delay, duplicate, and reorder. Any design that assumes otherwise 
 | Keep‑alive + pooling          | Handshakes amortized; stable latency                  | Pool sizing, state at both ends, stale detection | **Default** for services and HTTP clients |
 | Long‑lived persistent (e.g., WebSocket) | Server push, lowest per‑message overhead         | Connection state dominates at scale; L4‑aware load balancing; reconnect storms | High‑frequency bidirectional traffic      |
 
-***
+---
 
 ## 🔢 Numbers that matter
 
@@ -455,7 +455,7 @@ Empirical numbers <abbr title="[p. 350]">[i]</abbr>:
 
 Timeouts and capacity planning therefore care about **tail latency**, not just medians. Percentile analysis lives in [Latency, Throughput & Percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) and estimation habits in [Estimation & the Numbers](/synapse/system-design-from-first-principles/foundations/estimation-and-numbers).
 
-***
+---
 
 ## 🏭 In production
 
@@ -517,7 +517,7 @@ DNS in production is both your **cheapest availability lever** and your **slowes
 - rotating records across two load balancers in different regions is standard practice to avoid an LB as a single point of failure,
 - but failover speed is capped by the **TTL** clients have cached.
 
-***
+---
 
 ## 🪤 Pitfalls & interview traps
 
@@ -541,7 +541,7 @@ Other common traps:
 - **Choosing UDP for generic ‘performance’** where loss is not acceptable, or in browser‑heavy environments without a clear WebRTC usage story.
 - **Trusting HTTPS request bodies.** Encryption in transit says nothing about the honesty of the sender; always validate server‑side.
 
-***
+---
 
 ## ✅ Check yourself
 
@@ -590,7 +590,7 @@ Likely causes are **queueing and contention**: upstream switch/link congestion, 
 
 </details>
 
-***
+---
 
 ## 🔬 Proofs of concept & deeper reading
 
@@ -600,7 +600,7 @@ To go deeper on the protocols summarized here:
 - [Beej's Guide to Network Programming](https://beej.us/guide/bgnet/) — sockets from first principles (`connect()`, `send()`, `recv()`).
 - [The Illustrated TLS 1.3 Connection](https://tls13.xargs.org/) — a real TLS 1.3 handshake, byte‑by‑byte.
 
-***
+---
 
 ## 📚 Sources
 
