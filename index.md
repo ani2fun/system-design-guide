@@ -122,3 +122,5 @@ Look-up material — kept short and current.
 
 - [Glossary](/synapse/system-design-from-first-principles/reference/glossary)
 - [Numbers Quick Reference](/synapse/system-design-from-first-principles/reference/numbers-quick-reference)
+- [Bloom Filters — Deep Reference](/synapse/system-design-from-first-principles/reference/bloom-filters)
+- [Inventory Reservations at Scale in PostgreSQL](/synapse/system-design-from-first-principles/reference/inventory-reservations-postgres)
