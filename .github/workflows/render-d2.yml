@@ -1,0 +1,83 @@
+name: Draw the D2 figures
+
+# Compiles every ```d2 fence in this book to `_media/d2/<hash>.svg` and commits the result, so a
+# reader's page inlines a file instead of downloading a ~6 MB engine and compiling in the browser.
+#
+# It runs HERE rather than in the app because the engine is enormous while it works: one
+# 23-diagram lesson peaked at ~5.2 GB of RSS. That is nothing on a runner and impossible in the
+# 256Mi pod that serves the site — it OOM'd and 502'd the diagram-heavy lessons when it was tried.
+#
+# `_media/d2/` is content-addressed, not namespaced per book like the rest of `_media`. Two repos
+# that happen to author the same diagram produce the same filename AND the same bytes, so the
+# app's first-wins probe over every mounted checkout cannot pick a wrong one.
+#
+# A fence this has not reached yet simply falls back to the browser renderer: slow, but correct.
+# Nothing breaks while this is catching up, and nothing breaks if this book is never registered.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.md'
+      - '.github/workflows/render-d2.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: render-d2-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  draw:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The renderer lives in the APP repo, the same way `validate.yml` borrows the server's own
+      # walker, and for the same reason: the filename it chooses and the options it draws with
+      # must match `web/src/lib/islands/diagram/d2.ts` byte for byte, or every lookup misses.
+      # A miss is SILENT — the page falls back to the browser and merely gets slow — so a copy
+      # vendored here would drift with nothing to catch it. The app's `renderD2Script.test.ts`
+      # pins the two together, which makes running that exact file the honest choice.
+      - uses: actions/checkout@v4
+        with:
+          repository: ani2fun/synapse
+          path: .synapse-tools
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Installed in a scratch directory, NOT the book root: the renderer resolves the engine from
+      # its working directory, and a package.json here would end up in the commit below. The
+      # version is read from the app's own manifest so the two cannot drift apart.
+      - name: install the d2 engine the app uses
+        run: |
+          version=$(node -p "require('$GITHUB_WORKSPACE/.synapse-tools/web/package.json').dependencies['@terrastruct/d2']")
+          echo "engine $version"
+          mkdir -p /tmp/d2-engine
+          cd /tmp/d2-engine
+          npm init -y >/dev/null
+          npm install --no-save --no-audit --no-fund "@terrastruct/d2@$version"
+
+      - name: draw
+        run: |
+          cd /tmp/d2-engine
+          node "$GITHUB_WORKSPACE/.synapse-tools/dev-tools/render-d2.mjs" "$GITHUB_WORKSPACE" --prune
+
+      - name: commit what changed
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          # Only the drawn figures: the tool checkout is untracked and must stay that way.
+          if [[ -z "$(git status --porcelain _media/d2)" ]]; then
+            echo "every figure already drawn — nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add _media/d2
+          git commit -m "chore(media): redraw the d2 figures"
+          git push
