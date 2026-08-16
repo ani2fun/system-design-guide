@@ -184,90 +184,202 @@ The middle two rows are where candidates most often pick wrong: defaulting to th
 
 The working table — every figure carries its source: a DDIA page cite or an explicit flag. (A bare-tables quick reference, kept current, lands in this book's Reference module later.)
 
-| Quantity | Envelope value | Source |
-| --- | --- | --- |
-| Seconds per day / month / year | ~86,400 ≈ 10^5 / ~2.6 × 10^6 / ~3 × 10^7 | arithmetic |
-| Powers bridge | 2^10 = 1,024 ≈ 10^3 (KiB≈KB, GiB≈GB…) | arithmetic |
-| Type sizes | char 1 B · int64/pointer 8 B · UUID-as-text 36 B | arithmetic / convention |
-| Cache read latency (same region) | < 1 ms | Reference figure |
-| Intra-region network hop | 1–2 ms | Reference figure |
-| DB read: cached / uncached disk | 1–5 ms / 5–30 ms | Reference figure |
-| Indexed row lookup on SSD-backed DB | ~10 ms | Reference figure |
-| Cross-region round trip | 50–150 ms | Reference figure |
-| Cross-region RTT, high percentiles | up to several **minutes** | <abbr title="[p. 350]">[i]</abbr> |
-| GC pauses (modern, well-tuned) | a few ms (historically: minutes, stop-the-world) | <abbr title="[p. 370]">[i]</abbr> |
-| Quartz clock drift | up to 200 ppm ≈ 6 ms per 30 s uncorrected; ~17 s/day | <abbr title="[p. 360]">[i]</abbr> |
-| NTP sync error over the internet | ~35 ms at best; spikes to ~1 s | <abbr title="[p. 361]">[i]</abbr> |
-| Cache node: memory / throughput | up to ~1 TB / 100k+ ops/s | Reference figure |
-| Single DB node: storage / reads / writes | ~64 TiB (Aurora to 128 TiB) / up to ~50k read TPS / 10–20k write TPS (simple Postgres inserts 20k+/s) | Reference figure |
-| DB concurrent connections | 5–20k | Reference figure |
-| Log broker (Kafka-class), per broker | up to ~1M msgs/s · 1–5 ms end-to-end · up to ~50 TB retained | Reference figure |
-| App server | 100k+ concurrent connections · up to ~25 Gbps · 64–512 GB RAM standard | Reference figure |
-| Intra-DC bandwidth / cross-region bandwidth | ~10–20 Gbps standard / 100 Mbps–1 Gbps | Reference figure |
-| HDD annual failure rate | 2–5%/yr → a 10,000-disk fleet loses ~1 disk **per day** | <abbr title="[p. 44]">[i]</abbr> |
-| SSD annual failure rate | 0.5–1%/yr; uncorrectable errors ~1/yr/drive | <abbr title="[p. 44]">[i]</abbr> |
-| Fan-out reference workload | 500M posts/day = 5,800/s avg, 150k/s peak; ×200 fan-out ≈ 1.2M writes/s | <abbr title="[p. 34–36]">[i]</abbr> |
+```d2
+classes: {
+  header: {
+    style.bold: true
+    style.fill: "#1a1a2e"
+    style.font-color: white
+    style.stroke: "#0D32B2"
+    style.stroke-width: 2
+  }
 
-**Two cautions.**
+  row_header: {
+    style.bold: true
+    shape: rectangle
+    style.stroke: "#0D32B2"
+    style.stroke-width: 2
+  }
 
-- First, the throughput rows assume *well-tuned, simple* workloads — complex transactions, index write-amplification, and read/write contention pull real ceilings well below them.
-- Second, the table rots: quoting 2015's numbers in 2025 is how experienced-sounding candidates over-engineer. Recalibrate the size and rate rungs every couple of years; the time rungs age far more slowly.
+  mdcell: {
+    shape: rectangle
+    width: 260
+    style.stroke: "#0D32B2"
+    style.stroke-width: 2
+  }
+}
 
----
+System Design Scaling Reference: {
+  style.bold: true
+  style.font-size: 20
+  near: top-center
+  grid-rows: 6
+  grid-columns: 6
+  horizontal-gap: 0
+  vertical-gap: 0
 
-## 🏭 In production
 
-Real teams use envelope math in a lifecycle, and knowing where you are in it matters more than the arithmetic.
+  h1: "↓ Components \\ Metrics →" {class: header}
+  h2: "Latency" {class: header}
+  h3: "Throughput" {class: header}
+  h4: "Storage/Capacity" {class: header}
+  h5: "Compute" {class: header}
+  h6: "Scale Triggers" {class: header}
 
-**Before launch, estimation is all you have.**
+  r1c1: "Caching" {class: row_header}
 
-- There's no traffic to measure, so the first fleet is sized the way this lesson's worked examples run: assumed volumetrics × ladder thresholds, plus headroom.
-- The headroom isn't superstition — response time degrades sharply as throughput approaches capacity, because queueing delay explodes near saturation <abbr title="[p. 37]">[i]</abbr>.
-- Utilization targets (scale triggers sit at 70–80% CPU and memory for a reason) are the production encoding of that curve.
+  r1c2: |md
+  - **< 1ms same-region cache read**
+  - **\> 1ms triggers scale**
+  | {class: mdcell}
 
-**Peak-to-average discipline.**
+  r1c3: |md
+  - **100k+ ops/second**
+  | {class: mdcell}
 
-- DDIA's case-study workload averages 5,800 posts/s but spikes to 150,000 <abbr title="[p. 34]">[i]</abbr> — a 26× ratio.
-- Provision to the average and the spike is an outage; provision to the spike and you idle 25× the fleet you need.
-- Production systems split the difference structurally: capacity for a sustainable multiple of average, a queue to absorb what exceeds it <abbr title="[p. 36]">[i]</abbr>, autoscaling to chase the daily curve.
-- `Rule of thumb, not from source:` consumer diurnal peaks commonly run a small single-digit multiple of average; event-driven bursts, as the 26× shows, can be far worse.
+  r1c4: |md
+  - **Memory-bound, up to ~1TB per node**
+  | {class: mdcell}
 
-**After launch, measurement replaces estimation — mostly.**
+  r1c5: |md
+  - **Bounded by node vCPU/RAM allocation**
+  - **Typically 2-16 cores per cache instance**
+  | {class: mdcell}
 
-- Load tests and dashboards supersede assumed inputs, but envelope math stays on duty as the *sanity check*: does the cloud bill match the request math? Does the incident graph make sense?
-- Fleet failure math works the same way: at 2–5% annual HDD failure, a 10,000-disk fleet expects roughly a disk *per day* <abbr title="[p. 44]">[i]</abbr> — disk replacement becomes a scheduled process with an arrival rate, not an incident.
+  r1c6: |md
+  - **Hit rate < 80%**
+  - **Latency > 1ms**
+  - **Memory usage > 80%**
+  - **Cache churn/thrashing**
+  | {class: mdcell}
 
-**At growth inflections, estimation comes back.**
 
-An architecture built for one level of load is unlikely to survive 10× that load, so fast-growing systems revisit their architecture on every order of magnitude — and it's usually wasted effort to design more than one order ahead <abbr title="[p. 52]">[i]</abbr>. That cadence is how experienced teams schedule re-architecture instead of being ambushed by it. Even tail-latency targets get the envelope treatment: Amazon specifies internal SLOs at p99.9 but found optimizing p99.99 too expensive for the benefit <abbr title="[p. 40–41]">[i]</abbr> — a cost-benefit estimate deciding how much tail to buy, feeding back into the [nonfunctional requirements](/synapse/system-design-from-first-principles/foundations/nonfunctional-requirements) you committed to.
+  r2c1: "Databases" {class: row_header}
 
----
+  r2c2: |md
+  - **Cached: 1-5 ms**
+  - **Uncached disk: 5-30 ms**
+  - **Indexed SSD: ~10ms**
+  | {class: mdcell}
 
-## 🪤 Pitfalls & interview traps
+  r2c3: |md
+  - **~50k read TPS**
+  - **10-20k write TPS**
+  - **Postgres: 20k+/s inserts**
+  | {class: mdcell}
 
-<div style="border-left:4px solid #da5233;background:rgba(218,82,51,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
+  r2c4: |md
+  - **~64 TiB/node**
+  - **Aurora: up to 128 TiB**
+  - **5-20k connections**
+  | {class: mdcell}
 
-⚠️ **Precision theater.** Ten minutes of upfront volumetrics — every quantity, three significant figures, none of it consulted again — signals process-following, not judgment. Interviewers at senior levels read it as a memorized ritual. Estimate at the decision point, name the decision *before* the arithmetic, and round to powers of ten. If asked to "do the estimates" upfront, do them fast and flag which ones you'll actually revisit ("storage is the one that might force sharding — I'll come back to it at the data model").
+  r2c5: |md
+  - **8-64 cores typical**
+  - **Scales with storage-engine and query load**
+  | {class: mdcell}
 
-</div>
+  r2c6: |md
+  - **Write TPS > 10k**
+  - **Read latency > 5ms uncached**
+  - **Geographic distribution needs**
+  | {class: mdcell}
 
-The recurring traps, most of them documented candidate behavior:
 
-- **Premature sharding.** The single most common estimation failure: proposing a shard key for a 10–100 GB dataset that fits one node a hundred times over. Run the Yelp math before the word *"shard"* leaves your mouth.
-- **Caching a thing that's already fast.** Candidates overestimate simple-lookup latency and bolt a cache onto a ~10 ms indexed read that already meets the SLO. Cache expensive queries, not fast ones — every component you add is complexity you must now defend.
-- **Queueing a write load the database eats for breakfast.** 5k writes/s is not *"high write throughput"* — simple inserts run 20k+/s on one tuned Postgres node. Queues are justified by delivery guarantees, decoupling, event patterns, or genuine spikes (~50k+ WPS), not by 5k/s.
-- **Sizing to the average.** The 26× peak-to-average spread in the fan-out example <abbr title="[p. 34]">[i]</abbr> is the canonical counterexample; and remember from [percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) that latency claims quoted as averages hide the tail your users actually feel.
-- **Unit rot.** Bits vs. bytes (that 5 Tbps video estimate is 625 GB/s — an 8× error waiting to happen), per-day vs. per-second, GiB vs. GB at the wrong moment. Keep units written down at every step.
-- **Ending on a number.** *"So that's about 180 TB a year"* — and then silence. The interviewer's follow-up is always some form of *"…and what does that mean for your design?"* Beat them to it.
+  r3c1: "App Servers" {class: row_header}
 
-The interviewer follow-ups to expect: *"Does that fit in memory?"* (ladder comparison), *"What changes at 10× the load?"* (DDIA's order-of-magnitude planning <abbr title="[p. 52]">[i]</abbr> — know which component hits its ceiling first), and *"Where did that number come from?"* (source your inputs: given, assumed, or ladder).
+  r3c2: |md
+  - **Response latency > SLA triggers scale**
+  - **Intra-region hop: 1-2ms**
+  | {class: mdcell}
 
----
+  r3c3: |md
+  - **100k+ concurrent connections**
+  - **Up to ~25 Gbps**
+  | {class: mdcell}
 
-## ✅ Check yourself
+  r3c4: |md
+  - **64-512GB RAM standard**
+  - **Up to 2TB**
+  | {class: mdcell}
 
-```quiz
-{"prompt": "Mid-interview, you're designing a Yelp-like system (~10M businesses, ~1 KB each, plus reviews at ~10x that). The interviewer hasn't asked for numbers. What do strong candidates do about estimation here?", "options": ["Pause the design for a full volumetrics pass: users, QPS, storage, bandwidth, and growth", "Note that ~100 GB total fits comfortably on one database node, and keep designing", "Assume sharding will be needed at this scale and present the shard-key choice"], "answer": "Note that ~100 GB total fits comfortably on one database node, and keep designing"}
+  r3c5: |md
+  - **8-64 cores @ 2-4 GHz**
+  | {class: mdcell}
+
+  r3c6: |md
+  - **CPU > 70%**
+  - **Latency > SLA**
+  - **Connections near 100k/instance**
+  - **Memory > 80%**
+  | {class: mdcell}
+
+
+  r4c1: "Message Queues" {class: row_header}
+
+  r4c2: |md
+  - **1-5ms end-to-end**
+  | {class: mdcell}
+
+  r4c3: |md
+  - **Up to ~1M msgs/sec per broker**
+  | {class: mdcell}
+
+  r4c4: |md
+  - **Up to ~50TB retained per broker**
+  | {class: mdcell}
+
+  r4c5: |md
+  - **Partition count ~200k per cluster**
+  | {class: mdcell}
+
+  r4c6: |md
+  - **Throughput near 800k/s**
+  - **Partitions ~200k/cluster**
+  - **Growing consumer lag**
+  | {class: mdcell}
+
+
+  r5c1: "General Constants" {class: row_header}
+
+  r5c2: |md
+  - **Cross-region RTT: 50-150ms**
+  - **Tail latency: up to minutes**
+  - **GC pauses: few ms**
+  - **Historical GC pauses: minutes**
+  - **Clock drift: ~6ms/30s (~17s/day)**
+  - **NTP error: ~35ms; spikes ~1s**
+  | {class: mdcell}
+
+  r5c3: |md
+  - **Intra-DC: ~10-20 Gbps**
+  - **Cross-region: 100Mbps-1Gbps**
+  - **Fan-out: 500M posts/day**
+  - **Average: 5.8k/s; peak: 150k/s**
+  - **×200 fan-out: ~1.2M writes/s**
+  | {class: mdcell}
+
+  r5c4: |md
+  - **Seconds/day/month/year: ~86.4k / ~2.6M / ~3×10^7**
+  - **Powers bridge: 2^10 = 1,024 ≈ 10^3**
+  - **KiB ≈ KB**
+  - **char: 1B**
+  - **int64/pointer: 8B**
+  - **UUID text: 36B**
+  | {class: mdcell}
+
+  r5c5: |md
+  - **GC pauses affect compute scheduling**
+  - **Clock drift and NTP affect node timekeeping**
+  | {class: mdcell}
+
+  r5c6: |md
+  - **HDD failure: 2-5%/year**
+  - **10k-disk fleet: ~1 disk lost/day**
+  - **SSD failure: 0.5-1%/year**
+  - **Uncorrectable SSD errors: ~1/drive/year**
+  | {class: mdcell}
+}
 ```
 
 ```quiz
