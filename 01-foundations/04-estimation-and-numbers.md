@@ -186,28 +186,33 @@ The working table — every figure carries its source: a DDIA page cite or an ex
 
 ```d2
 classes: {
-  header: {
-    style.bold: true
-    style.fill: "#1a1a2e"
-    style.font-color: white
-    style.stroke: "#0D32B2"
-    style.stroke-width: 2
-  }
+    header: {
+      shape: rectangle
+      style.bold: true
+      style.fill: "#1A1A2E"
+      style.font-color: "#FFFFFF"
+      style.stroke: "#0D32B2"
+      style.stroke-width: 2
+    }
 
-  row_header: {
-    style.bold: true
-    shape: rectangle
-    style.stroke: "#0D32B2"
-    style.stroke-width: 2
-  }
+    row_header: {
+      shape: rectangle
+      style.bold: true
+      style.fill: "#E8EEFF"
+      style.font-color: "#111827"
+      style.stroke: "#0D32B2"
+      style.stroke-width: 2
+    }
 
-  mdcell: {
-    shape: rectangle
-    width: 260
-    style.stroke: "#0D32B2"
-    style.stroke-width: 2
+    mdcell: {
+      shape: rectangle
+      width: 260
+      style.fill: "#E8EEFF"
+      style.font-color: "#111827"
+      style.stroke: "#0D32B2"
+      style.stroke-width: 2
+    }
   }
-}
 
 System Design Scaling Reference: {
   style.bold: true
