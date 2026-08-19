@@ -1,0 +1,33 @@
+{
+  "generator": 1,
+  "source": "53db05c7",
+  "root": "root",
+  "boards": [
+    {
+      "id": "root",
+      "slug": "root",
+      "title": "System Context",
+      "parent": null,
+      "links": [
+        "root.layers.container"
+      ]
+    },
+    {
+      "id": "root.layers.container",
+      "slug": "container",
+      "title": "Container",
+      "parent": "root",
+      "links": [
+        "root.layers.code"
+      ]
+    },
+    {
+      "id": "root.layers.code",
+      "slug": "code",
+      "title": "Code",
+      "parent": "root",
+      "links": []
+    }
+  ],
+  "warnings": []
+}
