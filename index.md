@@ -63,7 +63,16 @@ The infrastructure catalog — what each component is, how it works inside, and 
 - [Specialized Stores: Geo, Time-series & Vectors](/synapse/system-design-from-first-principles/building-blocks/specialized-stores)
 - [Probabilistic Data Structures](/synapse/system-design-from-first-principles/building-blocks/probabilistic-data-structures)
 
-## 🧩 05 · Patterns
+## 🧰 05 · Key Technologies
+
+The named products you actually reach for in a design — what each one really is underneath the
+label, the one mechanism worth knowing, and what naming it commits you to.
+
+- [Redis](/synapse/system-design-from-first-principles/key-technologies/redis)
+- [Kafka](/synapse/system-design-from-first-principles/key-technologies/kafka)
+- [PostgreSQL](/synapse/system-design-from-first-principles/key-technologies/postgresql)
+
+## 🧩 06 · Patterns
 
 Reusable solution shapes that show up in every design — each grounded in the theory from modules 02–03.
 
@@ -76,7 +85,7 @@ Reusable solution shapes that show up in every design — each grounded in the t
 - [Idempotency & Exactly-once](/synapse/system-design-from-first-principles/patterns/idempotency-and-exactly-once)
 - [Event-driven: CQRS, Outbox & CDC](/synapse/system-design-from-first-principles/patterns/event-driven-cqrs-outbox-cdc)
 
-## 🏗️ 06 · Case Studies
+## 🏗️ 07 · Case Studies
 
 Thirteen interview-canonical systems designed end-to-end — requirements → entities → API → high-level design → the deep-dives that decide the interview — plus a capstone: the platform serving you this book, designed with the same framework and checkable against its live deployment.
 
@@ -95,7 +104,7 @@ Thirteen interview-canonical systems designed end-to-end — requirements → en
 - [Design a Distributed Job Scheduler](/synapse/system-design-from-first-principles/case-studies/job-scheduler)
 - [Capstone: Design Synapse — the Platform You're Reading](/synapse/system-design-from-first-principles/case-studies/synapse-capstone)
 
-## 🏭 07 · Production Engineering
+## 🏭 08 · Production Engineering
 
 Beyond the whiteboard: how industry actually ships, observes, scales, and survives these systems.
 
@@ -107,7 +116,7 @@ Beyond the whiteboard: how industry actually ships, observes, scales, and surviv
 - [Capacity & Autoscaling](/synapse/system-design-from-first-principles/production-engineering/capacity-and-autoscaling)
 - [Resilience & Incident Response](/synapse/system-design-from-first-principles/production-engineering/resilience-and-incidents)
 
-## 🎯 08 · Interview Playbook
+## 🎯 09 · Interview Playbook
 
 The delivery machinery: how to drive a 45-minute design interview from any seniority level.
 
@@ -116,7 +125,7 @@ The delivery machinery: how to drive a 45-minute design interview from any senio
 - [Traps & Follow-ups](/synapse/system-design-from-first-principles/interview-playbook/traps-and-followups)
 - [The Practice Ladder](/synapse/system-design-from-first-principles/interview-playbook/practice-ladder)
 
-## 📖 09 · Reference
+## 📖 10 · Reference
 
 Look-up material — kept short and current.
 
