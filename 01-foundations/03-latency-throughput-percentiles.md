@@ -40,16 +40,22 @@ Stand in a supermarket queue. Three quantities describe your afternoon:
 **The shopper and the store manager care about different numbers, and both are right.**
 
 - You feel response time.
-- The manager buys tills based on throughput, because throughput determines how much hardware — how much money — the operation needs <abbr title="(p. 37)">[i]</abbr>.
+- The manager buys checkout lanes based on throughput, because throughput determines how much hardware — how much money — the operation needs <abbr title="(p. 37)">[i]</abbr>.
 - A design conversation that doesn't separate the two goes in circles: *"make it faster"* might mean *shorten each visit* or *push more people through per hour*, and the fixes are different.
 
 **Now the queue teaches its second lesson.**
 
-It's nearly closing time, one till is open, and the person ahead of you has a mountain of groceries. Your basket holds two items; your *service time* will be ten seconds; your *response time* will be eight minutes. One slow customer at the head of the line delays everyone behind them — **head-of-line blocking**. Notice something subtle: the cashier's own logbook (*"time spent per customer"*) looks perfectly healthy. The suffering is invisible from behind the till. It is only visible from where you are standing <abbr title="(p. 39)">[i]</abbr>.
+It's nearly closing time. One checkout lane is open, and the person ahead of you has a mountain of groceries. Your basket holds two items, so your *service time* will be ten seconds — and your *response time* will be eight minutes.
+
+One slow customer at the front delays everyone behind them, and that is **head-of-line blocking**. Now notice what the cashier sees. Their own records — *"time spent per customer"* — look perfectly healthy, because scanning your two items really did take ten seconds. The delay is invisible from behind the counter and obvious from where you are standing <abbr title="(p. 39)">[i]</abbr>.
 
 **Finally, ask a hundred shoppers how long their trip took.**
 
-Most say two or three minutes; a few say fifteen. *"The average was 3.5 minutes"* describes almost nobody. Instead, line all hundred up, sorted from fastest to slowest. The person in the middle is the **median** — half did better, half did worse. The person 95th from the front marks the **95th percentile**: nineteen of twenty shoppers did at least this well. A percentile is nothing more mysterious than a position in that sorted line — and unlike an average, it is a statement about *how many people* had a given experience.
+Most say two or three minutes; a few say fifteen. *"The average was 3.5 minutes"* describes almost nobody.
+
+So line all hundred up instead, sorted from fastest to slowest. The person in the middle is the **median** — half did better, half did worse. The person 95th from the front marks the **95th percentile**: nineteen of twenty shoppers did at least this well.
+
+A percentile is nothing more mysterious than a position in that sorted line. Unlike an average, it is a statement about *how many people* had a given experience.
 
 ---
 
@@ -133,7 +139,11 @@ Feel the difference on a toy dataset — ten measured response times, already so
 32   38   41   45   52   58   71   105   260   1900
 ```
 
-The median is ~55 ms (between the 5th and 6th values). The p90 is 260 ms. The mean? 2,602 ÷ 10 = **260 ms** — dragged by a single outlier to the level of the *90th percentile*. Report the mean and you'll claim a *"typical"* experience that nine out of ten requests beat handily; report p50/p95/p99 and the shape of reality survives. (Simplification: there are several conventions for indexing percentiles in small samples — nearest-rank versus interpolation. At monitoring volumes the difference vanishes; what matters at small n is that high percentiles are jumpy, which is why dashboards compute them over rolling windows of many requests.)
+The median is ~55 ms (between the 5th and 6th values). The p90 is 260 ms. The mean? 2,602 ÷ 10 = **260 ms** — dragged by a single outlier all the way up to the *90th percentile*.
+
+Report the mean and you claim a *"typical"* experience that nine out of ten requests beat handily. Report p50/p95/p99 and the shape of reality survives.
+
+*Simplification:* there are several conventions for indexing percentiles in small samples — nearest-rank versus interpolation. At monitoring volumes the difference vanishes. What matters at small n is that high percentiles are jumpy, which is why dashboards compute them over rolling windows of many requests.
 
 **How far up the tail should you care?**
 

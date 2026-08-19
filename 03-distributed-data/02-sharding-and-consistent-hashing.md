@@ -14,7 +14,7 @@ essential: true
 
 You have followed every trick in the book. You added [read replicas](/synapse/system-design-from-first-principles/distributed-data/replication) so reads fan out across copies. You put a cache in front. You bought a bigger machine, then a bigger one. And still, one of two walls is coming.
 
-The first wall is **size**. A single node has a finite disk. When your dataset genuinely exceeds what one machine can hold — Amazon Aurora, for example, tops out around 256 TB per instance — no amount of replication saves you, because replication makes *copies* of the same data; every replica still has to hold the whole thing. Ten replicas of a 300 TB dataset is not 3 PB of capacity. It is 300 TB, stored ten times.
+The first wall is **size**. A single node has a finite disk. When your dataset genuinely exceeds what one machine can hold — Amazon Aurora's cluster volume, for example, tops out at 256 TiB on current engine versions and 128 TiB on older ones <abbr title="[web: AWS Aurora quotas and constraints]">[i]</abbr> — no amount of replication saves you, because replication makes *copies* of the same data; every replica still has to hold the whole thing. Ten replicas of a 300 TB dataset is not 3 PB of capacity. It is 300 TB, stored ten times.
 
 The second wall is **write throughput**. Replication scales *reads* beautifully — add followers, spread the read load — but every write still has to be applied by the leader, and eventually by every follower. If a single leader cannot keep up with the incoming write rate, more followers do nothing but add more machines that also cannot keep up. Read scaling has no answer for a write bottleneck <abbr title="(p. 253)">[i]</abbr>.
 

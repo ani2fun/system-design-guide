@@ -240,7 +240,7 @@ Brute force is genuinely correct and often *simpler* when the candidate set is s
 Each specialised store this lesson surveys, available as a Postgres extension you can add and query:
 
 - [PostGIS](https://github.com/postgis/postgis) — geospatial types and indexes (R-tree/GiST) on
-  PostgreSQL; the standard for *"find things near a point"* without a bespoke geo database.
+  PostgreSQL; the standard for *"find things near a point"* without a custom geo database.
 - [TimescaleDB](https://github.com/timescale/timescaledb) — time-series on PostgreSQL: hypertables,
   automatic partitioning by time and continuous aggregates.
 - [pgvector](https://github.com/pgvector/pgvector) — vector similarity search (HNSW/IVFFlat) in

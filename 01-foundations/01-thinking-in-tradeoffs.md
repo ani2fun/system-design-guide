@@ -187,7 +187,7 @@ Every new fact lands in the system of record first. On the operational side, the
 
 **For every piece of your system there are really two decisions: who *writes* the software, and who *deploys and operates* it.**
 
-- The spectrum runs from bespoke code you build and host yourself, through off-the-shelf software (open source or commercial) that you self-host — on your own hardware (*on premises*) or on rented cloud VMs (*IaaS*) — to fully managed cloud services and SaaS you touch only through an API.
+- The spectrum runs from custom code you build and host yourself, through off-the-shelf software (open source or commercial) that you self-host — on your own hardware (*on premises*) or on rented cloud VMs (*IaaS*) — to fully managed cloud services and SaaS you touch only through an API.
 - The classic rule of thumb for choosing: keep work that is your core competency and competitive advantage in-house; outsource what's routine and commonplace.
 - Nobody fabricates their own CPUs.
 

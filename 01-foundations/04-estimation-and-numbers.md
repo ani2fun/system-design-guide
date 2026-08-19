@@ -93,7 +93,7 @@ The comparison step only works if you carry thresholds in your head — a *ladde
 
 - ⏱️ **Time rungs** — how long things take, from the [latency and percentile machinery](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) you already have. In-memory cache reads come back in under a millisecond; a network hop within a region costs about 1–2 ms; a cached database read runs 1–5 ms, an uncached disk-backed read 5–30 ms, and a simple indexed row lookup on SSD-backed storage is on the order of 10 ms; crossing regions costs 50–150 ms. Then the tail: DDIA reports cross-region round trips of **up to several minutes** at high percentiles and intra-datacenter packet delays exceeding a minute during network reconfigurations <abbr title="[p. 350]">[i]</abbr> — the ladder's reminder that averages are the top of the distribution, not the whole of it.
 - 🚀 **Rate rungs** — what one node of each type sustains: an in-memory cache node serves 100k+ operations/second; a single well-tuned relational database sustains tens of thousands of transactions per second — up to ~50k reads, 10–20k writes, and 20k+ per second for *simple* inserts on Postgres; a modern log broker moves up to ~1M messages/second; an application server holds 100k+ concurrent connections and pushes up to ~25 Gbps.
-- 📦 **Size rungs** — what fits where: a big cache node holds up to ~1 TB in memory; a single database node handles up to ~64 TiB (managed engines like Aurora stretch to 128 TiB); a broker retains tens of TB; object storage is effectively unbounded. 2025 cloud ceilings run to multi-TB RAM machines and tens of TB of local NVMe per instance — treat the specific instance names as perishable, but the order of magnitude as the point.
+- 📦 **Size rungs** — what fits where: a big cache node holds up to ~1 TB in memory; a single database node handles up to ~64 TiB (managed engines like Aurora stretch to 128 TiB, and 256 TiB on current versions); a broker retains tens of TB; object storage is effectively unbounded. 2025 cloud ceilings run to multi-TB RAM machines and tens of TB of local NVMe per instance — treat the specific instance names as perishable, but the order of magnitude as the point.
 
 **Under the rungs sit the constants** — pure arithmetic, no source needed: ~86,400 seconds/day ≈ 10^5; ~2.6M seconds/month; ~3 × 10^7 seconds/year; 1 ASCII character = 1 byte; an int64 or pointer = 8 bytes; a UUID stored as text = 36 bytes.
 
@@ -131,7 +131,9 @@ flowchart LR
 
 **Consequence.**
 
-400M lookups/s is unbuildable at sane cost — hundreds of times beyond what any reasonable fleet of database nodes serves. 1.2M writes/s is large but tractable spread across cache shards. So the architecture flips to fan-out-on-write: precompute each timeline as a materialized view and serve reads from cache <abbr title="[p. 35–36]">[i]</abbr>. And the peak seals a second decision: 150k posts/s × 200 = **30M timeline deliveries/s** at spike — you don't provision steady-state infrastructure for that; you put a queue in front of fan-out and let delivery lag a few seconds during bursts, exactly as DDIA prescribes <abbr title="[p. 36]">[i]</abbr>. One multiplication chose the architecture; one more chose the queue.
+400M lookups/s is unbuildable at sane cost — hundreds of times beyond what any reasonable fleet of database nodes serves. 1.2M writes/s is large but tractable, spread across cache shards. So the architecture flips to fan-out-on-write: precompute each timeline as a materialized view and serve reads from cache <abbr title="[p. 35–36]">[i]</abbr>.
+
+The peak then seals a second decision. At spike, 150k posts/s × 200 = **30M timeline deliveries/s** — and you do not provision steady-state infrastructure for that. You put a queue in front of fan-out and let delivery lag a few seconds during bursts, exactly as DDIA prescribes <abbr title="[p. 36]">[i]</abbr>. One multiplication chose the architecture; one more chose the queue.
 
 ### 💾 Worked estimate 2 — feed storage
 
@@ -275,7 +277,7 @@ System Design Scaling Reference: {
 
   r2c4: |md
   - **~64 TiB/node**
-  - **Aurora: up to 128 TiB**
+  - **Aurora: 128-256 TiB**
   - **5-20k connections**
   | {class: mdcell}
 
@@ -387,6 +389,52 @@ System Design Scaling Reference: {
 }
 ```
 
+---
+
+## 🏭 In production
+
+**Estimation does not stop once a design is approved — it changes job.**
+
+Think of planning fuel for a long drive. Before setting off you estimate from distance and typical consumption. Once moving, you stop estimating and read the gauge. The estimate was never meant to be accurate. It was meant to tell you whether to set off at all, and whether to plan a stop.
+
+Production systems run the same three phases.
+
+- **Before launch**, estimates size the first deployment — how many application servers, how large a database, whether a CDN is structural rather than optional.
+- **After launch**, measurements replace them. Real percentiles, real cardinality and real growth rates are cheaper and far more truthful than any arithmetic.
+- **Afterwards**, estimates return for the questions measurement cannot answer: what breaks at ten times today's load, what next quarter's bill looks like, whether November's known spike fits.
+
+**Headroom is where estimation meets queueing theory.** Latency climbs gently as utilisation rises, then explodes as a system approaches capacity <abbr title="(p. 37)">[i]</abbr>. So teams size for a target utilisation well below the measured ceiling — often around half of it, so that losing one of two availability zones doubles per-node load without crossing the knee. `Rule of thumb, not from source:` the exact target varies by organisation and by how fast the system can scale out.
+
+**Re-plan by order of magnitude, not by percentage.** The useful cadence is to design for roughly ten times current load and revisit the architecture on arrival <abbr title="(p. 52)">[i]</abbr>. The reason is that architectures fail in jumps, not gradients: a shape that serves 10k QPS usually also serves 30k, and usually does not serve 300k.
+
+<div style="border-left:4px solid #195045;background:rgba(25,80,69,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
+
+💡 **Memorise ratios and methods, not constants.** Every hardware ceiling on this page is perishable. Amazon Aurora's cluster volume, for instance, doubled from 128 TiB to 256 TiB during 2025 <abbr title="[web: AWS Aurora quotas and constraints]">[i]</abbr>. The *method* — compare the estimate against a ladder, then let the comparison decide — survives every such change. The specific rung does not.
+
+</div>
+
+---
+
+## 🪤 Pitfalls & interview traps
+
+<div style="border-left:4px solid #da5233;background:rgba(218,82,51,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
+
+⚠️ **False precision is the classic tell.** Carrying three significant figures through a calculation whose inputs are guesses to within a factor of two signals that you have mistaken arithmetic for evidence. Round hard, round early, and say which inputs are assumptions. An answer of *"a few hundred gigabytes, so one node"* is stronger than *"412.7 GB"* — because it is honest about what the number can bear.
+
+</div>
+
+The remaining traps are cheaper individually, and they recur constantly.
+
+- **Bits versus bytes.** Network figures are quoted in bits per second, storage in bytes. A 5 Mbps stream is 0.625 MB/s, and mixing the two puts you off by 8× — enough to change the design and not enough to look obviously wrong.
+- **Powers of ten versus powers of two.** A vendor's "256 TB" and its "256 TiB" differ by about 10%; at petabyte scale that gap is real hardware. Aurora's ceiling is quoted in TiB, which is why this lesson writes it that way.
+- **Costing only the raw rows.** Row size × row count is the *floor*, not the answer. Replication factor, secondary indexes, and write-ahead and compaction overhead routinely multiply it several times over.
+- **Averaging away the peak.** A system provisioned for the mean fails at the spike, and spikes are where the interesting engineering lives — the fan-out exercise above turns on exactly this.
+- **Estimating something that decides nothing.** The point of an estimate is to change a decision. If the answer is the same at 100 GB and 10 TB, the arithmetic was ceremony — see [The Interview at 10,000 Feet](/synapse/system-design-from-first-principles/foundations/the-interview-at-10000-feet) on capacity-math theatre.
+
+---
+
+## ✅ Check yourself
+
 ```quiz
 {"prompt": "A service has 100M DAU, each triggering ~10 reads/day. Using ~10^5 seconds/day, what is the average read QPS, and what does it imply?", "options": ["~1,000 QPS, which a single app server can absorb", "~10,000 QPS, plausible for a modest app-server fleet in front of one well-tuned database", "~1,000,000 QPS, so aggressive sharding is unavoidable"], "answer": "~10,000 QPS, plausible for a modest app-server fleet in front of one well-tuned database"}
 ```
@@ -446,4 +494,5 @@ The reference numbers a back-of-the-envelope estimate leans on, in forms you can
 
 - DDIA2 ch. 2 pp. 33–52 — social-network volumetrics and fan-out math (pp. 34–36); queueing near capacity (p. 37); Amazon p99.9 vs. p99.99 (pp. 40–41); HDD/SSD failure rates (p. 44); order-of-magnitude planning cadence (p. 52).
 - DDIA2 ch. 9 pp. 350–370 — high-percentile network delays (p. 350); clock drift 200 ppm (p. 360); NTP error ~35 ms (p. 361); modern GC pause magnitudes (p. 370).
-- Flagged in place: video stream bitrate and diurnal peak multiples are `Rule of thumb, not from source:`; specific 2025 cloud instance ceilings are order-of-magnitude reference figures and marked perishable.
+- [web: AWS Aurora quotas and constraints] — the Aurora cluster-volume ceiling, verified 2026-08: 256 TiB on current engine versions, 128 TiB on earlier ones, measured per cluster volume rather than per instance.
+- Flagged in place: video stream bitrate and diurnal peak multiples are `Rule of thumb, not from source:`; specific 2025 cloud instance ceilings are order-of-magnitude reference figures and marked perishable; the ~50% utilisation target for headroom is a rule of thumb, not a sourced figure.
