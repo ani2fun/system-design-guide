@@ -129,7 +129,7 @@ flowchart LR
     classDef data   fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
     classDef async  fill:#f3e8ff,stroke:#9333ea,color:#581c87;
 
-    LB[Load balancer<br/>probes /healthz + watches live traffic]:::edge
+    LB[Load balancer:<br/>It probes /healthz and watches live traffic]:::edge
     H[Node healthy<br/>in rotation]:::svc
     U[Misses N probes or spikes 5xx<br/>→ marked unhealthy]:::async
     D[Draining: no new requests,<br/>let in-flight finish to timeout]:::async
