@@ -284,7 +284,7 @@ The other traps interviewers reliably probe:
 ```quiz
 {
   "prompt": "A dashboard shows your API's p95 response time is 1.5 s. What does that actually claim?",
-  "options": ["95 of every 100 requests finish in under 1.5 s; 5 take longer", "The average request takes 1.5 s", "The slowest request observed took 1.5 s", "95% of servers respond within 1.5 s"],
+  "options": ["The average request takes 1.5 s", "The slowest request observed took 1.5 s", "95 of every 100 requests finish in under 1.5 s; 5 take longer", "95% of servers respond within 1.5 s"],
   "answer": "95 of every 100 requests finish in under 1.5 s; 5 take longer"
 }
 ```
@@ -292,7 +292,7 @@ The other traps interviewers reliably probe:
 ```quiz
 {
   "prompt": "In one minute a service handles 100 requests: 90 finish in 100 ms, 9 in 500 ms, and 1 in 4,000 ms. Compute the median and the mean. Which statement is true?",
-  "options": ["Median 100 ms, mean 175 ms — the mean nearly doubles the typical user's actual wait", "Median 175 ms, mean 100 ms — the median is inflated by the outlier", "Median and mean are both about 100 ms — the outlier is too rare to matter", "Median 100 ms, mean 500 ms — the mean equals the p99"],
+  "options": ["Median 175 ms, mean 100 ms — the median is inflated by the outlier", "Median 100 ms, mean 175 ms — the mean nearly doubles the typical user's actual wait", "Median and mean are both about 100 ms — the outlier is too rare to matter", "Median 100 ms, mean 500 ms — the mean equals the p99"],
   "answer": "Median 100 ms, mean 175 ms — the mean nearly doubles the typical user's actual wait"
 }
 ```
@@ -362,8 +362,8 @@ Measuring latency honestly is harder than it looks — these are the tools and t
 - DDIA2 ch. 2 pp. 37–42 (describing performance; response time vs. latency vs. service time; queueing and head-of-line blocking; percentiles and tail latency; Amazon p999/p9999; tail-latency amplification; SLOs/SLAs; percentile estimation and histogram aggregation) — via digest `ch02-nonfunctional-requirements`.
 - DDIA2 ch. 2 p. 38 (retry storms, metastable failure, overload mitigations); pp. 49–52 (describing load; two lenses on rising load).
 - DDIA2 ch. 2 p. 41 (latency-vs-revenue studies: Google 2006/2009, Bing 2009, Akamai, Yahoo — reliability caveats as given in the source).
-- [web: Google SRE Book, *"Service Level Objectives"*] — the term *SLI* only; all SLO/SLA substance from DDIA2.
-- [web: J.D.C. Little — A Proof for the Queuing Formula L = λW, Operations Research, 1961] — Little's Law statement and the concurrency worked example.
-- [web: Colin Scott — Latency Numbers Every Programmer Should Know] — same-region/cross-region round trip and in-memory cache-read reference figures. The DB-read and message-queue rows in "Numbers that matter" are not from this or any other cited source — marked `Rule of thumb, not from source` per house style rather than left as an unsupported "Reference figure."
-- [web: Gil Tene — How NOT to Measure Latency, InfoQ] — the coordinated-omission mechanism.
-- [web: Eli Bendersky — Concurrent Servers, Part 2: Threads] — CPU-bound vs. I/O-bound concurrency scope note.
+- [web: [Google SRE Book, "Service Level Objectives"](https://sre.google/sre-book/service-level-objectives/)] — the term SLI only; all SLO/SLA substance from DDIA2.
+- [web: [J.D.C. Little — A Proof for the Queuing Formula L = λW, Operations Research, 1961](https://pubsonline.informs.org/doi/10.1287/opre.9.3.383)] — Little's Law statement and the concurrency worked example.
+- [web: [Colin Scott — Latency Numbers Every Programmer Should Know](https://colin-scott.github.io/personal_website/research/interactive_latency.html)] — same-region/cross-region round trip and in-memory cache-read reference figures. The DB-read and message-queue rows in "Numbers that matter" are not from this or any other cited source — marked Rule of thumb, not from source per house style rather than left as an unsupported "Reference figure."
+- [web: [Gil Tene — How NOT to Measure Latency, InfoQ](https://www.infoq.com/presentations/latency-response-time/)] — the coordinated-omission mechanism.
+- [web: [Eli Bendersky — Concurrent Servers, Part 2: Threads](https://eli.thegreenplace.net/2017/concurrent-servers-part-2-threads/)] — CPU-bound vs. I/O-bound concurrency scope note.
