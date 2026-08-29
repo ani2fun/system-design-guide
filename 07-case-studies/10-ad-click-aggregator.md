@@ -245,29 +245,131 @@ sequenceDiagram
 
 **The safety net — batch reconciliation.** After all that, this design still adds a second path, and DDIA explains why it's principled rather than paranoid. Transient Flink bugs, a bad code push, an out-of-order edge case — *software* errors slip through machinery designed for *infrastructure* failures. So: dump raw click events from the stream into S3; run a periodic Spark job — hourly or nightly — that recomputes the aggregates from raw events, from scratch; compare against what streaming wrote; investigate and correct discrepancies. This works because batch output is pure **derived data**: regenerated from immutable input on every run, so a corrected job corrects the numbers — DDIA calls the ability to recover from buggy code by rerunning *"human fault tolerance"* <abbr title="[DDIA2 pp. 451–452]">[i]</abbr>, and names reprocessing-from-the-log as exactly how derived views are rebuilt when logic changes <abbr title="[pp. 545–546]">[i]</abbr>. Running fast-stream and correct-batch over the same log is the two-path shape DDIA discusses as the lambda architecture — with the modern refinement that one engine can run both roles (kappa) if it replays history through the same event-time logic <abbr title="[p. 546]">[i]</abbr>. The dashboards run on the stream; the invoices trust the reconciliation. And notice the quiet prerequisite: reconciliation is only as good as the raw log's integrity — which is why the append-only, immutable event log is the one component nothing is allowed to shortcut. Count-affecting disputes end at the log, or they don't end.
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `ad-click-aggregator.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the stream aggregator. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_adclick_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Ad-click aggregator — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-ad-click-aggregator" root="System Context"
+direction: right
+
+classes: {
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+viewer: "Ad viewer\n[Person]" {
+  class: client
+  shape: person
+}
+
+advertiser: "Advertiser\n[Person]" {
+  class: client
+  shape: person
+}
+
+sys: "Ad-Click Aggregator\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+viewer -> sys: "clicks"
+advertiser -> sys: "metrics queries"
+
+layers: {
+  container: {
+    direction: down
+
+    viewer: "Ad viewer\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    advertiser: "Advertiser\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    ingest: "Click ingest\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    log: "Click log\n[Kafka]" {
+      class: async
+      shape: queue
+    }
+
+    stream: "Stream aggregator\n[Flink-style worker]" {
+      class: svc
+      link: _.layers.code
+    }
+
+    olap: "Aggregates store\n[OLAP store]" {
+      class: data
+      shape: cylinder
+    }
+
+    archive: "Raw archive\n[S3-style object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    batch: "Reconciliation job\n[Batch (Spark-style)]" {
+      class: svc
+    }
+
+    query: "Metrics API\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    ingest -> log: "append click event"
+    log -> stream: "consume (offsets + checkpoints)"
+    log -> archive: "archive raw events"
+    batch -> archive: "read raw"
+    batch -> olap: "corrections"
+    query -> olap: "aggregate queries"
+  }
+
+  code: {
+    direction: down
+
+    stream: "Stream aggregator\n[Flink-style worker]" {
+      class: svc
+
+      impression_deduper: "ImpressionDeduper" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/10-ad-click-aggregator/domain/impression_deduper.py"
+      }
+      window_aggregator: "WindowAggregator" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/10-ad-click-aggregator/domain/window_aggregator.py"
+      }
+      idempotent_sink: "IdempotentSink" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/10-ad-click-aggregator/domain/idempotent_sink.py"
+      }
+    }
+
+    log: "Click log\n[Kafka]" {
+      class: async
+      shape: queue
+    }
+
+    olap: "Aggregates store\n[OLAP store]" {
+      class: data
+      shape: cylinder
+    }
+
+    stream.impression_deduper -> stream.window_aggregator: "unique clicks"
+    stream.window_aggregator -> stream.idempotent_sink: "closed windows"
+    log -> stream: "consume (offsets + checkpoints)"
+    stream.idempotent_sink -> olap: "UPSERT (ad, window)"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the stream aggregator (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_adclick_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Ad-click aggregator — C4 code level (inside the stream aggregator)"
-></iframe>
 
 A **runnable implementation** of the stream aggregator lives at `_proof-of-concepts/07-case-studies/10-ad-click-aggregator/` in the repo root — the three classes above (`ImpressionDeduper`, `WindowAggregator`, `IdempotentSink`), over Postgres.
 
@@ -281,6 +383,211 @@ cd _proof-of-concepts/07-case-studies/10-ad-click-aggregator
 `./run test` feeds clicks with explicit event times and shows the stream semantics: clicks bucket into **event-time windows** that emit only once the **watermark** passes their end (a window still open is held back); a replayed impression id is **deduped** away; and a click landing in an already-emitted window is a **correction** — the window's count is recomputed and upserted (2 → 3), never lost. Upsert-by-(ad, window) is what makes replay and late data safe to bill on.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>13 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Ad viewer
+`Actor` · `Browser · mobile app`
+
+The **Ad viewer** is whoever clicks the ad — and the system's founding realism is that *"whoever"* includes a double-clicker, a flaky network that retries a lost POST, and a malicious script fabricating clicks for profit. Every one of those produces an HTTP request that looks like a click; only one of them is a billable event. The viewer is therefore not just a traffic source but the origin of the pipeline's hardest requirement: idempotency has to hold **end to end**, from the browser down, because a browser retry happens *above* every framework guarantee in the stack — no amount of Kafka or Flink machinery can see it.
+
+**Responsibilities**
+
+- Carry the **signed impression ID** minted when the ad was shown — the click's identity — back with the click. The unit of idempotency is the *impression*, not the (user, ad) pair: the same user legitimately clicking the same ad shown twice is two billable clicks.
+- Reach the advertiser's site only through the tracker's **302 redirect**, so no click escapes counting.
+- Retry freely: the design's promise is that a re-sent POST collapses to one count at ingest, not that the viewer behaves.
+
+**Where it breaks.** The adversarial tail — click fraud. An *unsigned* unique ID would let a script mint endless fresh *"impressions,"* each one unique and each one counted; the signature check at ingest closes that hole. Broader fraud detection (bots, click farms) is deliberately out of this design's scope.
+
+### 👤 Advertiser
+`Actor` · `Analytics dashboard`
+
+The **Advertiser** is the party the numbers are *for* — and the party that pays based on them, which is what turns this from an analytics exercise into an integrity problem. A dashboard that lags a few seconds is annoying and self-heals; an invoice computed from a wrong count stays wrong forever unless something detects and repairs it. The advertiser's two demands pull the architecture in opposite directions: sub-second queries over the last minute of traffic (speed), and counts trustworthy enough to be billed against (truth). The design refuses to pick one — the stream path serves the dashboard, the batch reconciliation path backs the invoice.
+
+**Responsibilities**
+
+- Query aggregated click metrics through the Metrics API at **1-minute minimum granularity**, expecting sub-second answers — which is only possible because the rows are pre-aggregated, not computed at query time.
+- Accept that the current minute is **provisional**: open windows flush early and incomplete, and late-arriving clicks can revise an already-published number via correction upserts.
+- Dispute invoices — the adversarial read path. *"The dashboard says so"* is not an answer; the immutable raw log is what turns a dispute into a replay-and-compare procedure instead of a negotiation.
+
+**Where it grows.** Today's surface is fixed-granularity counts per ad. The pressure is toward richer slices — geography, device, campaign roll-ups — each of which multiplies the pre-aggregation keyspace and pushes the OLAP store toward a real real-time analytics engine.
+
+### 🏢 Ad-Click Aggregator
+`System` · `Log + stream + OLAP + batch reconciliation`
+
+The **Ad-Click Aggregator** does one thing — count clicks — at 10k events/second, across machines that crash, retry, and redeliver, correctly enough that advertisers are billed on the result. That last clause is the whole design: an overcounted click is an overcharged advertiser, an undercounted one is revenue silently dropped, and a wrong count is *perpetual* until something detects and repairs it. So the architecture is two paths over one immutable log: a **stream** path (log → event-time windows → OLAP) that is fast and almost always right, and a **batch** path (raw archive → periodic recompute) that makes it provably right. Dashboards run on the stream; invoices trust the reconciliation.
+
+**Responsibilities**
+
+- Ingest every click exactly once *in effect*: verify the signed impression ID, dedup at the door, append to a partitioned log — salted for viral ads so one hot key can't melt a shard.
+- Aggregate by **event time**, not processing time, with a watermark deciding when a window is complete enough to emit — so a consumer restart never bills a phantom click spike.
+- Serve pre-aggregated `(ad, minute)` rows with sub-second latency, and keep them honest with idempotent upserts and batch corrections.
+
+**Where it breaks.** Every guarantee inside the pipeline has a boundary: *"exactly-once"* is effectively-once *state* within the framework, and side effects crossing out of it replay on failure. The system survives that not by trusting any single mechanism but by layering three — end-to-end impression IDs, checkpointed state, idempotent sinks — plus the reconciliation audit for whatever slips through.
+
+### ⚙️ Click ingest
+`Service` · `Python · FastAPI`
+
+**Click ingest** is the door, and the design's key insight is how much correctness work belongs *at* the door rather than deeper in the pipeline. A windowed stream operator can only dedup within its window — the same impression clicked at 12:00:59 and again at 12:01:01 lands in two different windows and counts twice. So dedup lives here, before the stream: verify the impression ID's **signature** first (an unsigned unique ID invites fraud — a script minting fresh *"unique"* IDs that all get counted), then check the ID against a Redis set; seen means drop, new means record and append. This is the end-to-end argument in ad-tech clothes: only an identifier minted at the true source — the ad *impression* — and carried through the whole path can suppress duplicates the frameworks below can't see, like a browser retrying a POST whose 302 got lost.
+
+**Responsibilities**
+
+- `POST /click`: verify signature → dedup check → append to the click log → **302 redirect** to the advertiser. Server-side redirect, so every click passes through us; record, then redirect.
+- Stay **stateless** — signature needs only the secret key, dedup state lives in Redis — so the fleet scales horizontally behind a load balancer to absorb the 10k/s peak.
+- Stamp the event's **event time** at receipt (a trustworthy server clock), the timestamp every window downstream will bucket by.
+
+**Where it breaks.** The dedup cache is the soft spot: ~1.6 GB for a day of impression IDs is tiny, but losing it reopens the double-count window — hence a replicated Redis Cluster with persistence, for a cache whose contents you can't recompute.
+
+### 🌊 Click log
+`Event stream` · `Kafka`
+
+The **Click log** is the component nothing is allowed to shortcut: an append-only, partitioned sequence of immutable click events, totally ordered within each shard. It buffers (a click spike or a slow consumer widens the lag instead of dropping data — the peak is ~8× the average, and the log is what lets consumers be sized nearer the average), it retains (~7 days: consumption is non-destructive, so a crashed job rewinds its offset and re-reads), and it *is* the recent system of record — every downstream artifact, from Flink's counters to the OLAP rows to the S3 archive, is a derived view recomputable from it. Count-affecting disputes end at the log, or they don't end.
+
+**Responsibilities**
+
+- Shard by **AdId**, so each ad's events land in one shard in total order and each stream task aggregates its ads with purely local state — no cross-shard coordination on the hot path.
+- **Salt hot keys**: a viral ad's clicks all hash to one shard, whose throughput cap becomes the ad's ceiling. For hot ads only, the key becomes `AdId:0…N` across N shards — splitting the write load at the cost of N partial counts that must be merged downstream. Salt the few, not the many.
+- Feed two consumers: the stream aggregator (fast path) and the raw archive (truth path).
+
+**Where it breaks.** Retention is the outage budget: a consumer that falls behind by more than the retention window starts missing events *permanently*. *"7 days"* really means *"we can survive a long weekend of pipeline failure and still recompute."*
+
+### 🛠️ Stream aggregator
+`Worker` · `Flink-style worker`
+
+The **Stream aggregator** is the fast path from click to queryable count — and the place where the innocent question *"which minute does this click belong to?"* gets its honest answer. A click has two timestamps: **event time** (when it happened) and **processing time** (when this worker gets to it), and they diverge whenever anything queues, retries, or restarts. Windowing by processing time turns a restart's backlog into a phantom traffic spike billed into the recovery minute; so this container windows by **event time**, always, and a **watermark** — the signal asserting "nothing earlier than *t* is coming" — decides when a one-minute tumbling window is complete enough to close and flush. Clicks arriving after that fork to a correction rather than being silently dropped: for billing, corrections beat losses.
+
+**Responsibilities**
+
+- Consume the log per shard, keeping a counter per open `(ad, minute)` window — small state, checkpointed with its input offsets so state and position recover *together*.
+- Close windows on watermark passage; flush provisional counts early so the current minute is live-but-incomplete on dashboards.
+- Emit closed windows to an idempotent sink — because *"exactly-once"* is effectively-once *state inside the framework*, and a replayed flush is a side effect the framework can't un-write.
+
+Three classes carry that pipeline — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class ImpressionDeduper {
+        +seen(impression_id) bool
+    }
+    class WindowAggregator {
+        +ingest(click)
+        +on_watermark(ts) list~WindowCount~
+    }
+    class IdempotentSink {
+        +flush(window_counts)
+    }
+    ImpressionDeduper --> WindowAggregator : unique clicks
+    WindowAggregator --> IdempotentSink : closed windows
+    note for ImpressionDeduper "one impression, one count —\ndedup upstream of windowing"
+    note for WindowAggregator "watermark closes windows;\nlate clicks fork to correction"
+    note for IdempotentSink "UPSERT keyed (ad, window) —\nreplay-safe by construction"
+```
+
+Each class maps to a file in the POC at `06-case-studies/examples/ad-click-aggregator/app/` (deferred to the hands-on phase) — click the code-level boxes for their docs.
+
+**Where it breaks.** A salted hot ad means N tasks each hold a partial count, so per-minute totals must be merged downstream. And with one-minute windows, checkpointing is arguably optional — the retained log lets a crashed job replay its lost minute — a pushback worth making before installing every feature the framework offers.
+
+### 🧩 ImpressionDeduper
+`Code` · `Python + Redis set`
+
+**ImpressionDeduper** exists because every reliability mechanism in the pipeline works by retrying, and a retry is a duplicate wearing a safety vest. The browser re-sends a POST whose 302 was lost; a consumer resumes from its last committed offset and reprocesses what it had handled but not checkpointed. Dropping duplicates is data loss's opposite twin — so the design retries freely and makes the duplicates harmless *here*, keyed by the one identifier that survives the whole journey: the **signed impression ID**, minted when the ad was shown. Not the user, not the ad — the *showing*: the same user clicking the same retargeted ad twice is legitimately two counts, which is why `(user_id, ad_id)` is the classic wrong key.
+
+**Responsibilities**
+
+- `seen(impression_id) → bool`: check the ID against the dedup set (Redis-backed, ~1.6 GB per 100M-click day); seen means drop, new means record-and-pass in one step.
+- Sit **upstream of windowing** — a windowed operator only sees duplicates within one window, and the 12:00:59 / 12:01:01 retry pair straddles a boundary and would count twice.
+- Assume the signature was verified at ingress; an unsigned *"unique"* ID is fraud's front door.
+
+**The invariant it protects:** *one impression, one count* — end to end, from the browser down, which no framework-level exactly-once can see.
+
+**Where it breaks.** Losing the dedup set reopens the double-count window for its whole horizon — the one cache in this design whose contents can't be recomputed. Mirrored by the forthcoming POC at `06-case-studies/examples/ad-click-aggregator/app/impression_deduper.py`.
+
+### 🧩 WindowAggregator
+`Code` · `Python (event-time windowing)`
+
+**WindowAggregator** answers the question that sounds trivial and isn't: *which minute does this click belong to?* A click has two timestamps — event time (when it happened) and processing time (when this operator handles it) — and bucketing by the wrong one turns a restart's backlog into a phantom traffic spike billed into the recovery minute, while the outage minutes look eerily quiet. So it buckets by **event time**, into tumbling one-minute windows: fixed length, every click in exactly one window, one counter incremented per click — small state, no event buffers. Event time is also what keeps *replay* meaningful: on reprocessing, *"now"* is wrong but the event stamps are still true.
+
+**Responsibilities**
+
+- `ingest(click)`: round the event timestamp down to its minute and increment that window's counter per ad — flushing provisional values while the window is open, so the current minute is live on dashboards.
+- `on_watermark(ts) → list~WindowCount~`: when the watermark — the assertion that nothing earlier than *ts* is coming — passes a window's end, close it and emit its final counts.
+- Route stragglers deliberately: a click arriving after its window closed forks to a **correction** (an upsert against the already-flushed row) rather than a silent drop — for billing, corrections beat quietly uncounted money.
+
+**The invariant it protects:** *the watermark closes windows; late clicks fork to correction* — no window is final by wall clock, only by evidence.
+
+**Where it breaks.** The watermark is a heuristic bound, not an oracle: set it tight and corrections multiply; set it loose and finality lags. Mirrored by the forthcoming POC at `06-case-studies/examples/ad-click-aggregator/app/window_aggregator.py`.
+
+### 🧩 IdempotentSink
+`Code` · `Python (OLAP upsert writer)`
+
+**IdempotentSink** is where the honest asterisk on *"exactly-once"* gets handled. Checkpointing restores the aggregator's counters perfectly — state and input offsets snapshot together, so recovery neither skips nor double-applies a click to *state*. What it cannot do is un-write the rows flushed to the OLAP store between the last checkpoint and the crash: exactly-once is effectively-once **within the framework's boundary**, and a restarted task performs its external side effects *again*. The two escapes are atomic commit kept inside the framework, or idempotent writes — and this design's output shape makes idempotence the natural fit: aggregates are keyed rows, so writing the same row twice can be made to converge instead of double.
+
+**Responsibilities**
+
+- `flush(window_counts)`: write every emitted window as an **UPSERT keyed by (ad, window)** — never an INSERT — so a replayed flush overwrites the same row with the same value, and recovery never double-counts.
+- Serve all three writers of the same contract: final window closes, late-click corrections, and batch reconciliation's fixes — one row identity, any number of safe rewrites.
+- Honor idempotence's fine print: replays must be deterministic and in-order, and failover needs fencing so a presumed-dead task can't keep writing stale values over fresh ones.
+
+**The invariant it protects:** *replay-safe upserts keyed by (ad, window)* — effectively-once state inside, idempotent effects outside.
+
+**Where it breaks.** Idempotence dedups identical aggregate *writes*, not duplicate *events* — a double-counted click is already inside the number by the time it reaches this class, which is why the deduper upstream exists. Mirrored by the forthcoming POC at `06-case-studies/examples/ad-click-aggregator/app/idempotent_sink.py`.
+
+### 📊 Aggregates store
+`Data warehouse` · `OLAP store`
+
+The **Aggregates store** holds the rows the whole system exists to compute: `(ad_id, minute_bucket) → click_count`, pre-aggregated so the advertiser's dashboard reads answers instead of computing them. It embodies the design's corrected instinct — move work from the read path to the write path. The naive alternative (GROUP BY over raw clicks at query time) re-scans millions of rows per dashboard refresh; here the aggregation happened once, upstream, and a week-long query touches ~10,080 pre-built rows. Sub-second latency is a property of the *shape* of the data, not of heroic query optimization.
+
+**Responsibilities**
+
+- Serve the Metrics API's range reads at minute granularity, with day/week roll-up tables shrinking long-range queries further.
+- Accept writes as **upserts keyed by (ad, window)**, never blind inserts — the property that makes replayed flushes, late-click corrections, and batch reconciliation all converge on the same row instead of doubling it. Three writers, one idempotent contract.
+- Hold provisional values for open windows (early flushes) that later flushes overwrite with finals.
+
+**Where it breaks.** Two edges. Salted hot ads land as N sub-rows whose totals must be merged at query time or by a second-stage aggregation — the read-side tax salting always charges. And batch corrections must arrive through controlled ingestion, not raw per-row UPDATE storms: batch jobs writing straight into a live serving store throttle the job and degrade query latency — the reason real-time OLAP engines ingest from streams by design.
+
+### 🪣 Raw archive
+`Object storage` · `S3-style object store`
+
+The **Raw archive** is every click, untouched, forever cheap — the source of truth the batch path recomputes from. Its power comes from a property decided at ingest: click events are **immutable**. An event records that something *happened*; it is never updated, only appended — which is exactly what makes the archive replayable and auditable. Everything downstream of the log is a derived view, and derived views earn their trustworthiness from the ability to be *re*-derived: same input, fixed code, correct output. The archive is where that ability lives beyond the stream's 7-day retention.
+
+**Responsibilities**
+
+- Receive raw click events dumped from the stream path and keep them as the durable, append-only record — ~10 GB/day at 100M clicks, a rounding error against the reconciliation value it buys.
+- Feed the reconciliation job's periodic from-scratch recomputation, and any ad-hoc replay: a bad deploy becomes a re-run instead of an apology.
+- Anchor billing disputes: an advertiser challenging an invoice triggers a procedure — replay Tuesday's events, recompute, compare — not a negotiation. Signed impression IDs in the raw events let you check dedup, fabrication, and timeline gaps after the fact.
+
+**Where it breaks.** The archive is only as good as what reaches it: it can prove or disprove anything about events it holds, and arbitrate nothing about clicks that were never captured. That's why the append-only, immutable log discipline is the one thing this design never compromises — integrity violations upstream of the archive are the ones no audit can repair.
+
+### 🏗️ Reconciliation job
+`Batch job` · `Batch (Spark-style)`
+
+The **Reconciliation job** is why the stream's numbers can be billed against — the principled paranoia after three layers of exactly-once machinery already did their jobs. Checkpoints and idempotent sinks defend against *infrastructure* failures; what slips through is *software*: a transient stream bug, a bad code push, an out-of-order edge case that quietly corrupts counts. Wrongness of that kind is perpetual until something detects and repairs it — so this job periodically recomputes the aggregates from the raw archive, from scratch, and compares against what streaming wrote. It works because batch output is pure derived data, regenerated from immutable input on every run: fix the code, re-run, and the numbers correct themselves — recovery from buggy logic by re-execution, the human fault tolerance batch uniquely offers. Fast-stream plus correct-batch over the same log is the lambda shape; the dashboards run on the stream, the invoices trust this job.
+
+**Responsibilities**
+
+- Read raw click events from the archive on an hourly or nightly cadence and re-aggregate `(ad, minute)` counts end to end — the load is trivial (a 5-minute cadence at peak is ~300 MB per run); the value is independence from the stream's code path.
+- Diff against the OLAP store's rows; surface discrepancies for investigation and write corrections — through the same idempotent upsert contract every other writer honors.
+- Serve as the continuous audit: run on schedule, not just when an advertiser disputes an invoice.
+
+**Where it breaks.** Two operational taxes: a second system to run, and discrepancy-investigation toil — every diff is a question someone must answer. Accepted knowingly, because the alternative is a billing pipeline with no independent check on itself.
+
+### ⚙️ Metrics API
+`Service` · `Python · FastAPI`
+
+The **Metrics API** is the advertiser's window into the counts: `GET /ads/{adId}/metrics?granularity=minute&from=…&to=…`, answered sub-second. Its speed is inherited, not engineered — it reads rows the pipeline already aggregated, so a week of an ad's traffic is ~10,080 pre-built numbers rather than a 50M-row scan. Notice what the endpoint deliberately *doesn't* offer: arbitrary ad-hoc queries. Constraining the read surface to pre-aggregated shapes is precisely what makes the latency promise keepable — the naive design died on exactly the flexibility this API declines to provide.
+
+**Responsibilities**
+
+- Serve range reads over `(ad_id, minute_bucket) → count` at 1-minute minimum granularity; answer coarser granularities (hour, day) from OLAP roll-up tables rather than widening any streaming window.
+- Present the current minute honestly: open windows flush early and provisional, so the freshest number is live-but-incomplete and firms up when the watermark closes the window.
+- Merge salted sub-rows where a hot ad was split into `AdId:0…N` — the read side pays salting's bookkeeping tax, either here at query time or in a second-stage aggregation upstream.
+
+**Where it breaks.** The API can only be as correct as the rows beneath it, and those rows are *revisable*: late-click corrections and batch reconciliation both rewrite history. A number an advertiser screenshotted yesterday may legitimately differ today — the design's stance is that a corrected count beats a stable wrong one, and the invoice trusts the reconciled figure, not the dashboard's first draft.
+
+</details>
 
 ## ⚖️ Trade-offs
 

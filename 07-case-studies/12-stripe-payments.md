@@ -225,29 +225,138 @@ Our event-sourced core is what makes this auditing *possible*: DDIA notes that e
 
 </div>
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `stripe-payments.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the payment API. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_payments_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Payment system — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-stripe-payments" root="System Context"
+direction: right
+
+classes: {
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  external: { style: { fill: "#f8fafc"; stroke: "#94a3b8"; font-color: "#475569"; stroke-dash: 3 } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+merchant: "Merchant\n[Person]" {
+  class: client
+  shape: person
+}
+
+psp: "PSP / card rails\n[External System]" {
+  class: external
+}
+
+sys: "Payment System\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+merchant -> sys: "charge (with idempotency key) · query status"
+
+layers: {
+  container: {
+    direction: down
+
+    merchant: "Merchant\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    api: "Payment API\n[Python · FastAPI]" {
+      class: svc
+      link: _.layers.code
+    }
+
+    keys: "Idempotency key store\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    intents: "Payment intents DB\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    ledger: "Ledger\n[PostgreSQL (append-only)]" {
+      class: data
+      shape: cylinder
+    }
+
+    webhooks: "Webhook receiver\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    recon: "Reconciliation job\n[Batch job]" {
+      class: svc
+    }
+
+    psp: "PSP / card rails\n[External System]" {
+      class: external
+    }
+
+    api -> keys: "check / store idempotency key"
+    api -> intents: "append state events"
+    api -> ledger: "append postings"
+    webhooks -> intents: "flip pending states"
+    webhooks -> ledger: "settlement postings"
+    recon -> ledger: "our numbers"
+    api -> psp: "authorize · capture"
+    psp -> webhooks: "async events (signed)"
+    recon -> psp: "settlement reports"
+  }
+
+  code: {
+    direction: down
+
+    api: "Payment API\n[Python · FastAPI]" {
+      class: svc
+
+      idempotency_guard: "IdempotencyGuard" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/12-stripe-payments/domain/idempotency_guard.py"
+      }
+      payment_intent_machine: "PaymentIntentMachine" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/12-stripe-payments/domain/payment_intent_machine.py"
+      }
+      ledger_writer: "LedgerWriter" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/12-stripe-payments/domain/ledger_writer.py"
+      }
+    }
+
+    keys: "Idempotency key store\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    intents: "Payment intents DB\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    ledger: "Ledger\n[PostgreSQL (append-only)]" {
+      class: data
+      shape: cylinder
+    }
+
+    psp: "PSP / card rails\n[External System]" {
+      class: external
+    }
+
+    api.idempotency_guard -> api.payment_intent_machine: "first attempt only"
+    api.payment_intent_machine -> api.ledger_writer: "transition → postings"
+    api -> keys: "check / store idempotency key"
+    api -> intents: "append state events"
+    api -> ledger: "append postings"
+    api -> psp: "authorize · capture"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the payment API (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_payments_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Payment system — C4 code level (inside the payment API)"
-></iframe>
 
 A **runnable implementation** lives at `_proof-of-concepts/07-case-studies/12-stripe-payments/` in the repo root — the three classes above (`IdempotencyGuard`, `PaymentIntentMachine`, `LedgerWriter`) over Postgres, the whole charge one transaction via a Unit-of-Work port.
 
@@ -261,6 +370,215 @@ cd _proof-of-concepts/07-case-studies/12-stripe-payments
 `./run test` proves the money invariants: charging with the same idempotency key twice returns the same payment and credits the merchant **once**; **10 concurrent** charges of one key still produce a single payment (the second key-insert blocks on the unique constraint until the first commits, then replays); an illegal transition (`created → capture`) is a 409; and every movement is two postings that net to zero, so **the whole ledger sums to 0**. Never charge twice, never lose money.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>12 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Merchant
+`Actor` · `Business backend · REST + webhooks`
+
+The **Merchant** is a business's backend server calling our API to charge its customers — and the design's first hard truth lives on their side of the wire: when a call times out, the merchant learns *nothing* about whether the charge happened, so any correct client **must retry**. The system is built so that this mandatory retry — which in a payment system would otherwise be the worst bug you can ship, a double charge — is harmless.
+
+**Responsibilities**
+
+- Generate a unique **idempotency key** per logical operation (a UUID or an order hash) and send it in the `Idempotency-Key` header on every mutating call — `POST /payment-intents`, `POST /payment-intents/{id}/confirm`.
+- **Reuse the same key on every retry** — the key is what lets our side recognize the retry as the same operation and replay the first outcome instead of charging again.
+- Never touch raw card data: the customer's browser sends card details to our hosted iframe directly; the merchant's server only ever handles an opaque token (PCI DSS).
+- Consume outcomes two ways — polling `GET /payment-intents/{id}` and receiving our **signed webhooks** — and deduplicate webhook deliveries by event ID, because we deliver at-least-once.
+
+The load-bearing habit is patience: a `processing` status is not an error, because the truth from the card networks arrives late by design.
+
+**Where it breaks.** A merchant that generates a *fresh* key per retry defeats the entire duplicate-suppression machinery — the end-to-end argument says the ID must originate where the operation is logically one thing, and that place is the merchant's code.
+
+### 🌐 PSP / card rails
+`External system` · `External — card networks, issuing & acquiring banks`
+
+The **PSP / card rails** box is everything we do not control: the card networks and the banks behind them. The design stance is to treat them as **asynchronous partners, not synchronous services** — they have their own queues, batch windows, and retry logic, so a charge we timed out on may still be winding through authorization, and one that succeeded instantly may have lost its response on the way back.
+
+**Responsibilities** (as seen from our side)
+
+- Answer `authorize` and `capture` calls — usually in seconds, sometimes not at all within our timeout.
+- Deliver **signed asynchronous callbacks** as charges progress through settlement, chargebacks, and reversals — the truth, arriving late, and re-delivered, so our webhook receiver must be idempotent.
+- Move actual money at **settlement**, a batch process days after capture — which is why the state machine keeps `settled` separate from `captured`.
+- Publish periodic **settlement files**: comprehensive, strictly formatted records of everything processed in a window — the definitive account the reconciliation job diffs our ledger against.
+
+The whole architecture bends around this boundary: pending states are first-class because this system's truth arrives late, and we spend timeliness (day-late settlement, batch reconciliation) to buy absolute integrity.
+
+**Where it breaks.** It doesn't have to break to hurt us — a single lost callback or a settlement that never lands silently diverges our ledger from theirs. That is why reconciliation is a standing job, not an emergency: trust, but verify.
+
+### 🏢 Payment System
+`System` · `At-least-once + idempotent · event-sourced ledger`
+
+The **Payment System** is the case study where the escape hatches run out: the data *is* money, every record is a legal fact, and *"we lost a little under load"* is a regulator's opening question. Its contract fits in one line: **a payment may be slow; it may never be wrong.** Notice what the non-functional requirements *don't* ask for — low latency on the final outcome. The system deliberately spends timeliness (pending states, day-late settlement, batch reconciliation) to buy absolute integrity.
+
+**Responsibilities**
+
+- **Never charge twice**: retries are mandatory (a timeout tells the caller nothing) *and* lethal (a duplicate charge is data corruption with a customer attached), so every mutating call is idempotent end-to-end via merchant-supplied keys.
+- **Never lose a charge**: a timeout is not a failure — it is the absence of knowledge, held honestly in a first-class `pending_verification` state until the PSP's late-arriving truth resolves it.
+- **Never UPDATE money**: every movement is append-only double-entry ledger postings; balances are derived views, deletable and recomputable; refunds and corrections are new opposite entries, never edits.
+- **Trust, but verify**: a reconciliation job diffs our ledger against the networks' settlement files and surfaces every break instead of absorbing it.
+- Handle ~10,000 TPS at peak with bursty holiday traffic, auditable forever.
+
+**Where it grows.** The append-only core is the scaling gift: logs absorb write bursts better than update-in-place tables, and every read-side view is a rebuildable cache. The bottleneck that remains is the external one — the card rails answer at their own pace, which no amount of our hardware changes.
+
+### ⚙️ Payment API
+`Service` · `Python · FastAPI`
+
+The **Payment API** is the only write path for money, and its internal order of operations *is* the design: idempotency check first, then the state machine, then ledger postings — in that order, every time. The ordering encodes the lesson's two hard truths. Retries are mandatory (a timeout tells the merchant nothing) and lethal (a double charge is data corruption with a customer attached), so duplicate suppression must run before anything else. And money is never UPDATEd, so what the state machine decides lands as appended events and balanced ledger postings, never as edits.
+
+**Responsibilities**
+
+- Check the merchant's `Idempotency-Key` against the key store *inside the same transaction* that records the attempt — a retry hits the uniqueness constraint and gets the stored first outcome replayed, not a second charge.
+- Drive the PaymentIntent lifecycle by appending state events; record the attempt **before** calling the PSP, so our intention is on disk whatever happens next.
+- On a PSP timeout, guess nothing: mark the attempt `pending_verification` — pending is a first-class state, because the PSP's truth arrives late.
+- Append double-entry postings for every money movement; balances are derived elsewhere.
+
+Three classes carry that work — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class IdempotencyGuard {
+        +run(key, request, fn) Result
+    }
+    class PaymentIntentMachine {
+        +transition(intent_id, event) State
+    }
+    class LedgerWriter {
+        +post(entries)
+    }
+    IdempotencyGuard --> PaymentIntentMachine : first attempt only
+    PaymentIntentMachine --> LedgerWriter : transition becomes postings
+    note for IdempotencyGuard "same key, same outcome —\nstores the first result and replays it to retries"
+    note for PaymentIntentMachine "illegal transitions impossible —\nstate = fold(appended events)"
+    note for LedgerWriter "postings always sum to zero —\nappend-only, never UPDATE"
+```
+
+Each class maps to a file in the POC at `06-case-studies/examples/stripe-payments/app/` (deferred to the hands-on phase) — click the code-level boxes for their docs.
+
+**Where it breaks.** Skip or reorder any step and a specific failure follows: idempotency after the charge means the retry pays twice; calling the PSP before recording the attempt means a crash erases the evidence that money may have moved.
+
+### 🧩 IdempotencyGuard
+`Code` · `Python`
+
+**IdempotencyGuard** owns `run(key, request, fn) Result` — the front door of the payment API's write path. It wraps every mutating operation: look the key up first; if it's new, record it and execute `fn` (the real work — state machine, PSP call, ledger postings); if it's seen, execute nothing and **replay the stored result**. It runs first because retries are mandatory — a timeout tells the merchant nothing about whether the charge happened — and lethal, since executing a charge twice is data corruption with a customer attached.
+
+**Responsibilities**
+
+- Insert the key under a **uniqueness constraint on (merchant_id, key)** in the *same transaction* that records the attempt — a duplicate's `INSERT` aborts cleanly; no check-then-insert race.
+- Store key → **outcome** (status and body), so a retry receives exactly what the original produced — even mid-flight, when the honest answer is `409 processing`.
+- Fingerprint the request, so the same key with a *different* payload is rejected as a client bug rather than replayed.
+
+**The invariant it maintains:** **same key ⇒ same outcome, end-to-end.** This is the end-to-end argument in code — duplicate suppression can only be implemented with the help of the endpoints. TCP dedupes within one connection; the database transaction is atomic but can't link a reconnecting client's retry to the commit it never saw. Only a client-generated ID carried through every hop to a uniqueness check suppresses the duplicate — including the user double-clicking checkout.
+
+**Where it breaks.** Key expiry: a retry arriving after the retention window is a new operation. Lands in the forthcoming POC at `06-case-studies/examples/stripe-payments/app/idempotency_guard.py`.
+
+### 🧩 PaymentIntentMachine
+`Code` · `Python`
+
+**PaymentIntentMachine** owns `transition(intent_id, event) State` — the single legal way a payment's lifecycle moves. It encodes the graph from the lesson: created → processing → authorized → captured → settled, with exits to failed, canceled, refunded, and disputed — and, crucially, `processing → pending_verification` on timeout, because a timeout is *not* a failure; it is the absence of knowledge, and the machine must be able to say *"I don't know yet"* without lying in either direction. Only IdempotencyGuard's first-attempt path reaches it; retries never do.
+
+**Responsibilities**
+
+- Validate every requested transition against the legal-transition table and **reject illegal ones structurally** — `settled` cannot come from `created`; a decline cannot follow a capture.
+- **Append an event per transition**, past tense, to the intents DB; the *"current status"* is never stored authoritatively, only derived.
+- Keep `settled` distinct from `captured`: authorization and capture are messages; settlement is money moving in a batch days later.
+- Hand each completed money-moving transition to LedgerWriter as balanced postings.
+
+**The invariant it maintains:** **illegal transitions are impossible, not discouraged — and state = fold(events).** Any reader folding the same event history reaches the same status; there is no column a bug or an operator can flip out from under the history. When the PSP's late truth arrives by webhook or reconciliation, it lands as one more appended event resolving `pending_verification` — never an edit.
+
+**Where it breaks.** Any second write path to the status column dissolves the guarantee — the machine only protects transitions that go through it. Lands in the forthcoming POC at `06-case-studies/examples/stripe-payments/app/payment_intent_machine.py`.
+
+### 🧩 LedgerWriter
+`Code` · `Python`
+
+**LedgerWriter** owns `post(entries)` — the only code allowed to touch the ledger, and the narrowest class in the system by design. It receives the postings a state transition implies (a $50 capture: debit customer funds $50, credit merchant pending balance $50; in the full model a third pair carves out the processing fee) and appends them atomically. It is the executable form of the lesson's deepest fix: `UPDATE` destroys history, so money is never UPDATEd again.
+
+**Responsibilities**
+
+- **Reject any posting set that doesn't sum to zero** before writing — balance is checked at the door, not hoped for downstream.
+- **Append, only ever append**: a refund is new entries in the opposite direction under a new transaction; an operator correction is a new reversing entry. No update or delete path exists — enforceable below the application with insert-only database grants.
+- Leave balances to the readers: a balance is a derived view, `SUM(entries WHERE account = X)` — materialized from the CDC stream at scale, but always a deletable, recomputable cache, never the truth.
+
+**The invariant it maintains:** **entries always balance, and the ledger is never UPDATEd** — no money lost, none conjured, mechanically. That pair is what makes the reconciliation job's audit possible: an append-only log can be replayed to *prove* what right is, where a mutable balance could only be overwritten and the bug's damage made permanent.
+
+**Where it breaks.** Nothing here dedupes or sequences — LedgerWriter trusts that IdempotencyGuard and PaymentIntentMachine ran first. Called outside that order, it will faithfully append a balanced double charge. Lands in the forthcoming POC at `06-case-studies/examples/stripe-payments/app/ledger_writer.py`.
+
+### 🗄️ Idempotency key store
+`Relational database` · `PostgreSQL`
+
+The **Idempotency key store** is the memory that makes retries safe: `key → (request fingerprint, stored result)`. It exists because of the uncomfortable pair of facts the lesson opens with — in a distributed system retries are not optional (a timeout gives the merchant zero information), and in a payment system a blind retry is the worst bug you can ship. This table is where "encouraged *and* harmless" is enforced.
+
+**Responsibilities**
+
+- Hold a **uniqueness constraint on (merchant_id, idempotency_key)** — inserted in the *same database transaction* that creates the payment attempt, so a retry's `INSERT` violates the constraint and aborts cleanly instead of charging again. Relational uniqueness holds even at weak isolation levels, where hand-rolled check-then-insert falls to write skew.
+- Scope keys **per merchant** (two merchants may coincidentally generate the same UUID) and per endpoint — the scope must exactly equal *"one logical operation from the client's point of view."*
+- Store the **response**, not just the key: a retry receives the same status and body the original produced, even mid-flight (`409 processing`) — key → outcome is a response cache with a legal function.
+- Expire keys after a retention window (rule of thumb: ~24 hours) — the table can't grow forever at 10k TPS.
+
+**Where it breaks.** At the edges of its own guarantees: a retry arriving *after* expiry is indistinguishable from a new operation, and the store only protects the merchant→us hop — the us→network hop needs its own attempt-reference discipline, because exactly-once is renegotiated at every trust boundary.
+
+### 🗄️ Payment intents DB
+`Relational database` · `PostgreSQL`
+
+The **Payment intents DB** holds the state machine's event log per payment: every transition — created, authorized, captured, settled, refunded, disputed — is an appended event, and the intent's current *"status"* is merely a fold of its history. A PaymentIntent answers *"what does the merchant want?"* — one intent, one *"please collect $50,"* no matter how many attempts that takes; each attempt is a separate Transaction row referencing back to it, which is what makes a retry representable at all.
+
+**Responsibilities**
+
+- Append state events; never rewrite them — the past-tense record of what happened is the audit trail regulators read.
+- Hold `pending_verification` as a **first-class state**: a timeout is not a failure, it is the absence of knowledge, and the machine must be able to say *"I don't know yet"* without lying in either direction. The PSP's truth arrives late — via webhook or reconciliation — and only then does the pending state resolve.
+- Keep `settled` distinct from `captured`: authorization and capture are messages; settlement is *money*, moving in a batch days later. Conflate them and you report money as arrived that a network failure still owes you.
+- Feed CDC: every committed change is captured off the write-ahead log into Kafka, keyed by `payment_intent_id` for per-intent ordering — the eventing is automatic, not disciplinary.
+
+**Where it breaks.** If application code could flip a status column directly, illegal transitions would be merely discouraged. The PaymentIntentMachine class exists to make them impossible — this store is only as trustworthy as that single write path.
+
+### 🗄️ Ledger
+`Relational database` · `PostgreSQL (append-only)`
+
+The **Ledger** is the financial source of truth auditors read — a double-entry record where every movement of money is a set of immutable entries summing to zero: a $50 capture debits customer funds $50 and credits the merchant's pending balance $50. The intuition section's villain was the mutable balance column, whose `UPDATE` destroys history; this table is the refusal to ever run `UPDATE` on money again — enforceable at the database-permission level with insert-only grants.
+
+**Responsibilities**
+
+- Accept **appends only**. A refund is not an edit — it is new entries in the opposite direction under a new Refund transaction. An operator correction is likewise a new reversing entry. There is no `UPDATE` or `DELETE` path at all.
+- Reject unbalanced postings: every transaction's entries must sum to zero, which is what *"no money lost, none conjured"* means mechanically.
+- Serve as the base for **derived balances**: a balance lives nowhere authoritative — it is `SUM(entries WHERE account = X)`. At scale you materialize that sum from the CDC stream, but the materialization is a cache, always reconstructible; if a bug corrupts it, delete it and re-derive. In the naive design the corrupted balance *was* the record.
+- Double as the audit log — event sourcing wearing an accountant's visor: replaying the same log reproduces the same state, so the system can *prove* what right is, not just be told it's wrong.
+
+**Where it grows.** Append-only logs absorb write bursts better than update-in-place tables — the Black Friday shape of this traffic — while every read view catches up downstream at its own pace.
+
+### ⚙️ Webhook receiver
+`Service` · `Python · FastAPI`
+
+The **Webhook receiver** is where the PSP's truth arrives — late, asynchronously, and more than once. The card networks are asynchronous partners: a charge we timed out on may still be winding through authorization, and its outcome reaches us not in the original response but in a signed callback minutes later. This container is the reason `pending_verification` can be an honest state rather than a lie: something downstream is guaranteed to resolve it.
+
+**Responsibilities**
+
+- **Verify signatures** on every inbound callback — the payload claims money moved; the signature is what makes that claim authenticable rather than spoofable.
+- **Flip pending intents**: the callback — not our optimistic bookkeeping at request time — is what moves `pending_verification` to `authorized` or `failed`, and `captured` to `settled`.
+- **Append settlement postings** to the ledger as funds actually move — new entries, never edits, per the ledger's only rule.
+- Stay **idempotent**: the networks deliver at-least-once, so callbacks re-arrive; processing an event twice must have the same effect as once — deep dive 1's lesson recursing inward, deduplicating by event ID exactly as we ask merchants to do with *our* outbound webhooks.
+
+The design stance it embodies is the timeliness/integrity split: staleness is an annoyance that resolves itself; corruption is a catastrophe that doesn't. Merchants tolerate a `processing` badge; no one tolerates a wrong charge.
+
+**Where it breaks.** A lost callback is silent — nothing errors, an intent just stays pending and the ledgers quietly diverge. That gap is precisely the reconciliation job's beat: this container handles the truth that arrives; reconciliation hunts the truth that didn't.
+
+### 🏗️ Reconciliation job
+`Batch job` · `Batch job`
+
+The **Reconciliation job** is *"trust, but verify"* made operational. However good the flows, our ledger and the networks' records *will* diverge — a lost callback, a bug in either system, a settlement that never lands. At sufficient scale even very unlikely corruptions happen, so integrity must be **checked, not assumed**; auditability is prized in finance precisely because everyone knows mistakes happen and must be detectable and fixable. This is a standing job, not an emergency.
+
+**Responsibilities**
+
+- Consume attempt and timeout events off the CDC stream, and **proactively query the network** for anything stuck in `pending_verification` — resolving the *"I don't know yet"* states the webhooks never resolved.
+- Systematically **diff each settlement file** — the networks' comprehensive, strictly formatted record of everything they processed in a window — against our ledger. Matches confirm integrity; mismatches open cases.
+- Surface every break instead of absorbing it; each fix is an appended correcting entry, never an edit.
+
+The checking is deliberately **end-to-end**: verify the whole derived pipeline against the counterparty's definitive account and you have implicitly verified every disk, network hop, and service along it. And the event-sourced core is what makes the audit *possible* — replaying the same log through the same deterministic code reproduces the same state, so a ledger system can *prove* what right is, where a mutable-balance system can only be told it's wrong.
+
+**Where it breaks.** It trades timeliness for integrity by construction: settlement files arrive in daily batches, so a divergence can sit undetected for hours. That is the accepted cost — money may be slow, never wrong.
+
+</details>
 
 ## ⚖️ Trade-offs
 

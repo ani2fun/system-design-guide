@@ -275,29 +275,129 @@ Efficiency's quiet killer is redundant work, and it comes in two distinct layers
 
 **Where the exact set gets expensive — and where probabilistic structures earn a mention.** There are two implementations worth weighing. The straightforward one: store the content hash as an indexed column in the Metadata DB and do an indexed lookup per fetched page. The objection writes itself — a 10-billion-row index, a lookup and possible write per page at thousands of pages per second — but that objection is worth pushing back on: modern databases handle large indexes well, the overhead is real but well-optimized, and the concern is safe to overlook at this scale. The seductive alternative is a **Bloom filter** — a probabilistic set (hosted in Redis, which ships one) that answers *"definitely not seen"* or *"probably seen"* in constant time and a fraction of the memory. Its price is **false positives**: *"probably seen"* is sometimes wrong, and each false positive means a genuinely new page silently skipped — for a corpus builder, quiet data loss. The verdict here is refreshingly anti-clever: the Bloom filter is a bit overkill here, candidates reach for it because it's famous, and the boring indexed lookup is the more practical choice. Deploy the nuance, not just the buzzword: exact set for correctness at this scale; probabilistic structures earn their place when memory, not correctness, is the binding constraint — they get a full treatment in [Probabilistic Data Structures](/synapse/system-design-from-first-principles/building-blocks/probabilistic-data-structures).
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `web-crawler.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the frontier. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_webcrawler_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Web crawler — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-web-crawler" root="System Context"
+direction: right
+
+classes: {
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  external: { style: { fill: "#f8fafc"; stroke: "#94a3b8"; font-color: "#475569"; stroke-dash: 3 } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+operator: "Operator\n[Person]" {
+  class: client
+  shape: person
+}
+
+web: "The Web\n[External System]" {
+  class: external
+}
+
+sys: "Web Crawler\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+operator -> sys: "seed · budget · policy"
+
+layers: {
+  container: {
+    direction: down
+
+    operator: "Operator\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    frontier: "URL frontier\n[Queue + Redis state]" {
+      class: async
+      shape: queue
+      link: _.layers.code
+    }
+
+    fetchers: "Fetcher fleet\n[Python workers]" {
+      class: svc
+    }
+
+    parser: "Parser / extractor\n[Python workers]" {
+      class: svc
+    }
+
+    seen: "Seen stores\n[Indexed metadata DB / KV]" {
+      class: data
+      shape: cylinder
+    }
+
+    store: "Page store\n[S3-style object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    dlq: "Retry & DLQ\n[Queue (DLQ)]" {
+      class: async
+      shape: queue
+    }
+
+    web: "The Web\n[External System]" {
+      class: external
+    }
+
+    frontier -> fetchers: "next URL (politeness-gated)"
+    fetchers -> store: "checkpoint raw page (ack only after durable)"
+    fetchers -> parser: "page pointer — never the payload"
+    fetchers -> dlq: "repeated failures"
+    parser -> store: "read raw · store extracted text"
+    parser -> seen: "content hash check"
+    parser -> frontier: "discovered URLs"
+    frontier -> seen: "URL-seen check"
+    fetchers -> web: "HTTP GET (rate-limited per host)"
+  }
+
+  code: {
+    direction: down
+
+    frontier: "URL frontier\n[Queue + Redis state]" {
+      class: async
+      shape: queue
+
+      frontier_scheduler: "FrontierScheduler" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/08-web-crawler/domain/frontier_scheduler.py"
+      }
+      politeness_gate: "PolitenessGate" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/08-web-crawler/domain/politeness_gate.py"
+      }
+      url_deduper: "UrlDeduper" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/08-web-crawler/domain/url_deduper.py"
+      }
+    }
+
+    fetchers: "Fetcher fleet\n[Python workers]" {
+      class: svc
+    }
+
+    seen: "Seen stores\n[Indexed metadata DB / KV]" {
+      class: data
+      shape: cylinder
+    }
+
+    frontier.frontier_scheduler -> frontier.politeness_gate: "may I fetch this host?"
+    frontier.url_deduper -> frontier.frontier_scheduler: "fresh URLs only"
+    frontier -> fetchers: "next URL (politeness-gated)"
+    frontier.url_deduper -> seen: "seen?"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the frontier (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_webcrawler_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Web crawler — C4 code level (inside the frontier)"
-></iframe>
 
 A **runnable implementation** of the frontier lives at `_proof-of-concepts/07-case-studies/08-web-crawler/` in the repo root — the three classes above (`FrontierScheduler`, `PolitenessGate`, `UrlDeduper`), over Redis.
 
@@ -311,6 +411,203 @@ cd _proof-of-concepts/07-case-studies/08-web-crawler
 `./run test` exercises the frontier's three jobs: five seed URLs — three that normalize to the same, one robots-disallowed — admit **two** (dedup + robots); `/next` **rotates across hosts** so none monopolizes the fetchers; and after a host is dispatched, a second `/next` for it returns nothing until the politeness interval elapses — the per-host `SET NX PX` rate gate holding the crawl polite.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>12 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Operator
+`Actor` · `Human · crawl operations`
+
+The **Operator** is the only human in a system whose *"users"* are ten billion web pages. Unlike the rider or the uploader of earlier case studies, they don't sit inside the request path — they set the crawl's *constitution* and then watch it govern itself: seed URLs (usually given — major directories, news sites, popular domains), the hard **5-day time budget**, and the politeness policy (the 1 request/second/domain norm, honoring robots.txt).
+
+**Responsibilities**
+
+- Seed the frontier and declare *"done"*: a one-shot corpus crawl has a bounded job with an end, not an SLA that runs forever.
+- Set policy the machines enforce — the time budget that fixes the ~23,000 pages/second fleet rate, and the politeness rules that cap any single host at one polite stream.
+- Watch the dashboards that say whether the loop is healthy: **fetch success rate** (a fleet-wide dip is *our* problem — DNS, egress, IP reputation; a domain-scoped dip is *theirs* — skip it), **DLQ depth** (how much web we're writing off), **frontier depth and its growth derivative**, crawl rate against the budget line, and the **duplicate ratio** (a spike usually means a trap or a normalization bug, not a suddenly repetitive internet).
+- Triage the dead-letter queue — the DLQ exists to be *monitored*, and declaring a site offline and unscrapable is a human judgment.
+
+**Where it grows.** The moment the corpus must stay fresh, the operator's one-shot job becomes a scheduling policy — recrawl by last-crawl time and importance — and this actor starts owning a continuous system instead of a deadline.
+
+### 🌐 The Web
+`External system` · `Billions of external HTTP hosts`
+
+**The Web** is the external system every other box exists to survive. It is not ours, it made no promises, and it behaves accordingly: servers that are down, pages that have moved, connections that trickle one byte per second, *"pages"* that turn out to be 2 GB files, and malformed HTML that crashes parsers. Every earlier case study integrated with *one* third party under contract; this one integrates with **billions of strangers**.
+
+**Responsibilities** (as the crawler must model them)
+
+- Serve pages — at whatever latency, correctness, and mood each host chooses; fetch is the failure-richest stage in the pipeline precisely because this side of the arrow is uncontrolled.
+- Publish the terms of engagement: **robots.txt** per host — disallowed paths and `Crawl-delay` — which the crawler fetches on first encounter and must honor.
+- Push back when crawled too hard: rising latencies, 429/503 responses, and ultimately blocks — politeness at fleet scale is a reputational asset, and one abusive incident can get IP ranges blocked by CDNs fronting half the sites you need.
+- Set traps, designed and accidental: self-linking page loops, calendars with a *"next month"* forever, session IDs and tracking parameters minting infinite distinct URLs for one page — the reason depth caps and aggressive URL normalization exist.
+
+**Where it breaks the crawler.** Never in one place — that's the point. Hostility here arrives as a distribution, so the design answers with per-host gates, per-message retries, and a DLQ, rather than any assumption that a fetch will succeed.
+
+### 🏢 Web Crawler
+`System` · `Queue-pipelined fetch/parse loop`
+
+The **Web Crawler** takes a handful of seed URLs and turns them into a text corpus of **10 billion pages (~20 PB of raw HTML) inside a 5-day budget** — roughly 23,000 pages/second sustained — without ever hammering a single host. Those two goals pull opposite directions, and the whole architecture is the reconciliation: per-domain throughput is *capped* at ~1 request/second by politeness, so fleet speed can only come from **breadth** — thousands of domains crawled concurrently, one polite stream each.
+
+**Responsibilities**
+
+- Schedule: the **URL frontier** decides which URL a fetcher gets next — allowed by robots.txt and rate limits, worth crawling now — which makes it the system's brain, not its buffer.
+- Fetch durably: stateless **fetchers** claim work under a visibility timeout and ack only after the HTML is safe in the **page store** — a crashed worker's message simply reappears for someone else.
+- Extract and close the loop: **parsers** pull text and links from stored pages; discovered URLs pass through dedup back into the frontier.
+- Remember: the **seen stores** answer *"have we met this URL / this content before?"* — the loop-breaker that keeps the crawl from re-crawling the web into itself.
+- Fail sideways: transient errors retry with backoff; poison pages drain to the **DLQ** instead of blocking the pipeline.
+
+**Where it breaks.** Delivery is at-least-once, never exactly-once — the design absorbs duplicates through idempotence (content-addressed writes, no-op status updates, the dedup check) so a double fetch costs bandwidth, never corpus corruption. The punchline of the numbers: four large machines suffice — this is a *bandwidth* problem, not a compute problem.
+
+### 📮 URL frontier
+`Message queue` · `Queue + Redis state`
+
+The **URL frontier** is the part of the design where the naive answer — *"it's a queue"* — is most wrong. A queue answers *"what arrived first?"*; the frontier answers a question no plain queue can: *of all the URLs I could crawl right now, which am I **allowed** to crawl, and which is **worth** crawling first?* That makes it the scheduler of the entire system — the crawl's brain.
+
+**Responsibilities**
+
+- Interleave domains rather than serve discovery order: think of it as logically **sharded by domain** — every URL of a host in one lane, lanes consumed round-robin, a rate-limited lane delaying only itself. (In the SDS build the same effect emerges compositionally: shared queue + per-domain Redis window + delayed re-enqueue.)
+- Enforce politeness *before* a URL leaves: robots.txt rules and the per-host rate limit — because per-domain throughput is capped (~1 req/s means a 1M-page domain needs ~11.6 days alone), throughput must come from breadth.
+- Admit only fresh work: discovered links pass a normalize-then-seen-check before entering.
+
+Three classes carry that logic — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class FrontierScheduler {
+        +next_url(fetcher) URL
+    }
+    class PolitenessGate {
+        +allow(host) bool
+        +robots(host) Rules
+    }
+    class UrlDeduper {
+        +add_if_new(url) bool
+    }
+    FrontierScheduler --> PolitenessGate : may I fetch this host?
+    UrlDeduper --> FrontierScheduler : fresh URLs only
+    note for FrontierScheduler "rotates domains: no host starves the\nbudget, no fetcher hammers one site"
+    note for UrlDeduper "normalizes before checking —\nthe loop-breaker"
+```
+
+Each class maps to a file in the POC at `06-case-studies/examples/web-crawler/app/` (deferred to the hands-on phase) — click the code-level boxes for their docs.
+
+**Where it grows.** For a one-shot corpus crawl, FIFO-with-politeness is defensible; add freshness requirements and the frontier gains a **priority** dimension — a URL Scheduler ordering by importance and recrawl due-date.
+
+### 🧩 FrontierScheduler
+`Code` · `Python`
+
+**FrontierScheduler** is the answer to the question that makes the frontier more than a queue: *which URL does this fetcher get next?* A FIFO would answer *"whatever arrived first"* — and since parsers enqueue a page's links together, discovery order clusters same-domain URLs, which is exactly the order politeness forbids consuming.
+
+**Responsibilities**
+
+- `next_url(fetcher) → URL`: hand the calling fetcher its next unit of work — **rotating across domains** rather than draining them in arrival order, so the fleet's throughput comes from breadth (thousands of hosts, one polite stream each) instead of futile depth on a rate-capped host.
+- Ask **PolitenessGate** before releasing anything — *"may I fetch this host?"* — and, when a host's gate is closed, step past it: a blocked domain delays only its own lane, never the fleet.
+- Accept new work only from **UrlDeduper** (*"fresh URLs only"*) — the scheduler never sees a URL the crawl already knows.
+
+**The invariant it protects:** **no host starves the budget, and no fetcher hammers one site.** A million-page domain at 1 req/s needs ~11.6 days by itself — the scheduler's rotation is what keeps that arithmetic from becoming the crawl's fate, and its gate check is what keeps a thousand independent fetchers from dog-piling one origin.
+
+**Where it breaks.** If rotation degrades to FIFO — a bug, or one domain flooding discovery — the frontier's head fills with URLs the gate keeps refusing, and workers spin on *"not yet"* instead of fetching. Lands in the forthcoming POC at `06-case-studies/examples/web-crawler/app/frontier_scheduler.py`.
+
+### 🧩 PolitenessGate
+`Code` · `Python`
+
+**PolitenessGate** encodes the crawl's manners as code: the published rules a site declares, and the rate discipline the fleet imposes on itself. Politeness is **per-host** by nature — robots.txt is a per-host document, crawl-delay is a per-host promise, and a thousand fetchers must collectively look like *one* polite visitor to each site — so the gate keys everything by host, never globally, never per-fetcher.
+
+**Responsibilities**
+
+- `robots(host) → Rules`: on first encounter with a host, fetch and parse its robots.txt (this design assumes a one-time download; real crawlers refresh periodically) and remember the disallowed paths and `Crawl-delay`.
+- `allow(host) → bool`: the composite verdict — path not disallowed, crawl-delay elapsed since the host's last fetch, and the per-host rate window (the ~1 req/s norm) open. Enforced **centrally**, because N fetchers checking independently is how N simultaneous requests hit one origin.
+- Refuse without blocking: a *"no"* delays that host's lane only — the scheduler steps past it and everyone else's flow continues.
+
+**The invariant it protects:** **a URL leaves the frontier only when its host's gate opens.** No path around it — fetchers never rate-limit themselves, they trust the gate.
+
+**Where it breaks.** On the stampede: many fetchers waiting on one host's window will all retry the instant it resets, one wins, the rest re-stampede in lockstep — the fix is **jitter**, a small random delay per fetcher. Lands in the forthcoming POC at `06-case-studies/examples/web-crawler/app/politeness_gate.py`.
+
+### 🧩 UrlDeduper
+`Code` · `Python`
+
+**UrlDeduper** is the loop-breaker. The crawler is a feedback loop — parsers discover links, links become fetches, fetches discover links — and without a membership check at the loop's entrance, the web's densely cross-linked graph would have the crawl re-crawling itself forever. Every discovered link passes through this class before it may enter the frontier.
+
+**Responsibilities**
+
+- `add_if_new(url) → bool`: **normalize first, then check-and-add** against the URL-seen set in one motion — returns `True` (admit to the scheduler) only for a genuinely new canonical URL.
+- Normalization is the half that does the real work: lowercase scheme and host, strip fragments and default ports, resolve relative paths, canonicalize trailing slashes — so the seen-check compares canonical forms, not raw strings. `Example.com/a/` and `example.com/a#top` are one page; only normalization lets the set know it.
+- Stay **exact**: the check is a point lookup against the seen store — no Bloom filter, because its false positives mean new pages silently skipped, and quiet data loss is the wrong trade for a corpus builder.
+
+**The invariant it protects:** **normalize-then-check is the loop-breaker** — no URL enters the frontier twice under any spelling, which is the property that makes the crawl terminate.
+
+**Where it breaks.** On what normalization can't see: session IDs and tracking parameters minting infinite *distinct-looking* URLs for one page defeat a naive canonicalizer — stripping known tracking parameters, depth caps, and per-domain budgets are the backstops. Lands in the forthcoming POC at `06-case-studies/examples/web-crawler/app/url_deduper.py`.
+
+### 🛠️ Fetcher fleet
+`Worker` · `Python workers`
+
+The **Fetcher fleet** is the muscle of the crawl — and deliberately nothing more. Each worker is **stateless**: it claims a URL, resolves DNS, performs the rate-limited HTTP GET against the open web, checkpoints the raw HTML into the page store, and hands a pointer onward for parsing. Everything a fetcher knows lives in the message it holds and the stores it writes; kill one mid-page and the system loses nothing.
+
+**Responsibilities**
+
+- **Claim, don't take**: receiving a URL starts a **visibility timeout** — the message is hidden from other workers, not deleted. The fetcher **acks (deletes) only after the HTML is durably stored**. A fetcher that dies mid-fetch simply never acks; the message reappears and another worker picks it up. Crash recovery is nobody's job — it's the queue's default behavior.
+- Fetch politely: every request has already passed the frontier's per-host gate, so a thousand fetchers collectively behave like one polite visitor per site.
+- Checkpoint before handing off: raw HTML to the page store (idempotent — keyed by normalized URL, a duplicate write overwrites itself), then enqueue for parsing.
+- Give up gracefully: repeated failures ride exponential backoff (30 s → 2 m → 5 m → up to 15 m) and after 5 attempts drain to the DLQ.
+
+**Where it breaks.** The claim/ack contract yields **at-least-once**, not exactly-once: store the HTML, die before deleting the message, and the URL is fetched twice. That's the accepted price — a duplicate fetch wastes bandwidth, and idempotent writes ensure it never corrupts the corpus. The fleet's real ceiling is bandwidth, not CPU: about four network-optimized machines cover the whole 5-day crawl.
+
+### 🛠️ Parser / extractor
+`Worker` · `Python workers`
+
+The **Parser / extractor** turns raw HTML into the two things the system actually wants: the **text corpus** and the **next generation of URLs**. It is a separate stage from fetching on purpose — the stage boundary means a parser crash never costs a re-fetch, and when the ML team later wants alt-text included, you rerun this cheap stage over stored HTML without touching the web again.
+
+**Responsibilities**
+
+- Read raw HTML back from the page store (the queue carries pointers, never 2 MB payloads), extract the text, and write it to the page store — then ack its message, same claim/ack contract as the fetchers.
+- **Content-hash dedup**: hash the fetched page's content and check it against the seen stores. Different URLs routinely serve identical bytes — `example.com` vs `www.example.com`, mirrors, syndicated articles — and URL-level dedup cannot see this; *only the bytes can*. A hash match means skip storage and just harvest the links. For an LLM corpus this pays twice, since near-duplicates get scrubbed in data prep anyway.
+- Close the loop: **normalize** every discovered link, seen-check it, and enqueue only the unseen into the frontier — this feedback edge is what makes the crawler a self-sustaining loop rather than a batch job over seeds.
+
+**Where it breaks.** Poison pages — malformed HTML that crashes the worker on every retry — would redeliver forever; capped retries and the DLQ turn them into a triage list instead. And the fleet needs no capacity math: autoscale on queue depth and let it track the fetchers' actual output.
+
+### 🔑 Seen stores
+`Key-value database` · `Redis / KV`
+
+The **Seen stores** are the crawl's memory — the exact-membership answer to two different questions that beginners collapse into one. **"Have we seen this URL?"** is asked by the frontier side before a discovered link may enter (via the UrlDeduper, on normalized canonical forms). **"Have we seen this content?"** is asked by the parser after a fetch, using a content hash — because the web serves the same bytes under many names, and only hashing the bytes catches mirrors and boilerplate clones. Two layers, two keys, one store family.
+
+**Responsibilities**
+
+- Hold the **URL-seen set**: point lookups keyed by normalized URL, sitting on the hot path of every discovered link — thousands of checks per second, each a boring indexed lookup.
+- Hold the **content hashes**: one per stored page, consulted before extraction and storage.
+- Stay **exact**. The seductive alternative is a Bloom filter — constant-time, a fraction of the memory — but its false positives mean genuinely new pages silently skipped: quiet data loss for a corpus builder. SDS's verdict is anti-clever: at 10B rows a modern indexed store handles this fine; probabilistic structures earn their place when *memory*, not correctness, is the binding constraint.
+
+**Where it breaks.** On normalization bugs upstream, not on scale: if two spellings of one URL reach the check un-canonicalized, the set dutifully calls them different and the crawler does the work twice. A spiking duplicate ratio on the dashboard usually means exactly that — or a crawler trap minting infinite URLs — not a suddenly repetitive internet.
+
+### 🪣 Page store
+`Object storage` · `S3-style object store`
+
+The **Page store** is the deliverable. Everything else in the diagram is machinery; the set of extracted-text blobs living here *is* the corpus the downstream LLM training pipeline was promised. It holds both artifacts of every crawl: the **raw HTML** (written by fetchers, read back by parsers) and the **extracted text** (written by parsers, read by consumers).
+
+**Responsibilities**
+
+- Absorb petabyte-class volume: 10B pages × ~2 MB averages out to **~20 PB of raw HTML** — the number that rules the storage choice. That is object-store territory, not database territory — the same instinct that sent YouTube's video bytes and Dropbox's file blocks to blob storage.
+- Serve as the **checkpoint between stages**: a fetcher acks its queue message only after the HTML lands here, and a parser reads from here rather than from any worker's memory — durable intermediate state is what makes each stage independently retryable.
+- Store **content-addressed / keyed by normalized URL**, which makes duplicate writes idempotent: the at-least-once redelivery upstream becomes a harmless overwrite here, never a second copy.
+- Keep raw HTML *after* extraction — the cheap insurance that lets the parse stage rerun with new extraction logic (alt-text, different boilerplate rules) without re-fetching a single page.
+
+**Where it grows.** Raw HTML dominates the bill at ~20 PB; a long-lived crawler eventually faces lifecycle policy — how long raw pages stay hot before tiering to cold storage — a cost conversation, not a correctness one.
+
+### 📮 Retry & DLQ
+`Message queue` · `Queue (DLQ)`
+
+**Retry & DLQ** is where the crawler's optimism ends and its accounting begins. Fetching is the failure-richest stage in the system — servers down, pages moved, connections that trickle — so failure handling is designed, not hoped for. Transient failures get **exponential backoff**: a failed message returns to visibility after 30 seconds, then 2 minutes, 5 minutes, up to 15 — the queue's own redelivery machinery doing the retrying, no hand-rolled timer that a crash would lose.
+
+**Responsibilities**
+
+- Bound the retries: after **5 attempts** (the queue's receive count), stop. Retries without a ceiling are how one bad page eats a fleet.
+- Quarantine **poison messages**: the malformed HTML that crashes its parser on every attempt, the 2 GB *"page"*, the one-byte-per-second server. Without a DLQ these would redeliver in a loop forever — wasting resources or blocking progress; moving them aside unblocks the pipeline.
+- Be the ledger of the written-off web: a URL landing here means the site is declared offline and unscrapable — a *decision*, recorded, not a silent drop.
+
+**Where it breaks.** A DLQ that nobody watches is just a slower way to lose data — it exists to be **monitored**, and its depth is the operator's direct gauge of how much web the crawl is abandoning. A sudden climb is a signal worth triaging: one distressed megasite, an IP-reputation problem on our side, or a parser bug masquerading as a hostile internet.
+
+</details>
 
 ## ⚖️ Trade-offs
 

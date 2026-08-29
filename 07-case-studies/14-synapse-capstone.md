@@ -143,17 +143,103 @@ In front of everything, a CDN (Cloudflare): static assets cache as immutable, co
 `max-age=60, stale-while-revalidate=600` — one minute of author-visible staleness bought the read
 path's independence from origin capacity.
 
-The whole design in C4 Container notation — pan and zoom, click any element for its doc (rendered
-live from this module's `synapse-capstone.c4` model):
+The whole design as a **walkthrough** — the system in context, then the containers inside it.
+Click the **Synapse** box to drop a level; the ◀ ▶ ⌂ controls walk back out.
 
-<iframe
-  src="/c4/view/sdfp_synapse_container"
-  width="100%"
-  height="560"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Synapse — C4 Container view"
-></iframe>
+```d2 boards name="c4-synapse-capstone" root="System Context"
+direction: right
+
+classes: {
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  external: { style: { fill: "#f8fafc"; stroke: "#94a3b8"; font-color: "#475569"; stroke-dash: 3 } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+reader: "Reader\n[Person]" {
+  class: client
+  shape: person
+}
+
+author: "Author\n[Person]" {
+  class: client
+  shape: person
+}
+
+content_repo: "Content repository\n[git (GitHub)]" {
+  class: external
+  shape: cylinder
+}
+
+sys: "Synapse\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+reader -> sys: "HTTPS: read, run, submit"
+author -> content_repo: "git push (publishing)"
+
+layers: {
+  container: {
+    direction: down
+
+    reader: "Reader\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    author: "Author\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    content_repo: "Content repository\n[git (GitHub)]" {
+      class: external
+      shape: cylinder
+    }
+
+    edge: "Edge cache\n[Cloudflare]" {
+      class: edge
+    }
+
+    spa: "Web app\n[Astro SSR · TS islands]" {
+      class: client
+    }
+
+    api: "Origin API\n[Rust · axum]" {
+      class: svc
+    }
+
+    content_sync: "Content checkout\n[git-sync sidecar]" {
+      class: svc
+    }
+
+    sandbox: "Code sandbox\n[go-judge]" {
+      class: svc
+    }
+
+    db: "Submissions store\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    idp: "Identity provider\n[Keycloak]" {
+      class: external
+    }
+
+    edge -> api: "cache fill: content JSON (keyed by contentVersion)"
+    spa -> edge: "lesson reads (mostly edge-served)"
+    spa -> api: "POST /run (sync, rate-limited) · POST /submissions (202 + poll)"
+    api -> content_sync: "read checkout + HEAD SHA"
+    api -> sandbox: "execute run · judge hidden suite (per case)"
+    api -> db: "submissions: pending → completed · grants"
+    spa -> idp: "OIDC sign-in (once per session)"
+    author -> content_repo: "git push (publishing)"
+    content_sync -> content_repo: "pull (content follows the repo, no redeploy)"
+  }
+}
+```
 
 ---
 
@@ -245,6 +331,190 @@ everywhere, or `Alice` and `alice` are silently two people — the class of bug 
 a confusing 403 six weeks later.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>8 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 📚 Content repository
+`Source repository` · `git (GitHub)`
+
+Books as Markdown in git — the authoring plane of the whole platform. `git push` **is** the
+publish action: no CMS, no pipeline rebuild, no redeploy.
+
+**Why git is the right database for content**
+
+- **One writer, many readers.** The entire multi-writer problem space — conflicts, replication
+  protocols, consensus — is absent by construction.
+- **Versioning for free.** Every state of the content has a SHA; the running system stamps reads
+  with the SHA they were derived from, which is what makes every cache above it correct by key.
+- **Review and rollback are git.** A bad push is a revert; authorship, history, and diff tooling
+  come along at zero design cost.
+
+The trade-off, named honestly: CMS ergonomics (previews, WYSIWYG, drafts for non-technical
+authors) are given up. For a platform whose authors write in Markdown anyway, that's the cheap
+side of the trade.
+
+### 🌍 Edge cache
+`CDN` · `Cloudflare`
+
+The read path's real capacity. At the 1M-MAU peak the platform sees ~80 lesson loads/s — and ≥95%
+of them terminate here, leaving the origin single-digit requests per second.
+
+**Cache policy by asset class**
+
+- **Page assets** — content-hashed filenames, cached as immutable.
+- **Content JSON** — `max-age=60, stale-while-revalidate=600`, keyed against `contentVersion`
+  (the content git SHA): one minute of author-visible staleness buys the read path's independence
+  from origin capacity. Correct by construction — a cached lesson tagged with a SHA stays the right
+  answer for that SHA.
+- **Media** — long-TTL; moves to object storage behind the same CDN at higher stages.
+
+**The million-user evolution**
+
+Make content URLs SHA-addressed and the objects immutable (`max-age=1y`): the origin then serves
+each lesson roughly **once per content push per region**, and reads become origin-less. Staleness
+becomes a dial on the *pointer* (which SHA is current), never a gamble on the *data*.
+
+### 💻 Web app
+`Web application` · `Astro SSR · TS islands`
+
+The reading UI, server-rendered: a lesson's prose arrives as HTML in the response, so reading
+works before — and without — any JavaScript. The interactive parts hydrate as **islands**: the
+code editor, diagram rendering, the algorithm visualiser and the search palette are separate,
+lazy bundles that load only on pages that use them. Per-page eager JavaScript measures in the
+tens of KiB and is enforced by a per-page budget in CI.
+
+**Responsibilities**
+
+- Render lessons server-side from the same public content API the edge caches — this tier holds
+  no state and no secrets of its own.
+- The workbench island: edit a starter, `POST /run` for interactive feedback, `POST /submissions`
+  and poll for the verdict (the ~1 s poll loop is the client's half of the async judging
+  contract).
+- The OIDC dance (authorization code + PKCE) against the identity provider — once per session;
+  the resulting token rides API calls and is verified locally at the origin.
+
+**Design notes**
+
+Anonymous readers get the full reading + run experience — sign-in gates only editing persistence
+and submissions. The judged verdict, including the one revealed failing case, is rendered from
+the server's response; the hidden suite itself never reaches this component.
+
+### ⚙️ Origin API
+`Service` · `Rust · axum`
+
+The **Origin API** is stateless by construction — the property every scaling stage leans on. No
+sessions, no sticky routing: identity arrives as a JWT verified against the IdP's cached public
+keys (local crypto, no network call), so any replica can serve any request and horizontal scaling
+is a replica count.
+
+**Responsibilities**
+
+- **Content reads** — serve the derived read model (catalog index, lesson payloads) from the
+  git-sync checkout, stamping every response with `contentVersion` (the checkout's HEAD SHA) so
+  every cache above keys correctly.
+- **Run gateway** — `POST /run`: rate-limit, then execute synchronously in the sandbox inside the
+  ~2 s interactive budget. Back-pressure is a `429`, never a queue.
+- **Submissions** — `POST /submissions` → `202 {id}`; judge the hidden suite asynchronously in the
+  sandbox; advance the row `pending → completed`; answer polls. The hidden suite never leaves this
+  process.
+- **Grants & account** — the allowlist gate on submit-and-save; account deletion via a
+  least-privilege service-account client (one permission, one realm — blast radius by design).
+
+Internally a **modular monolith**: hexagonal bounded contexts (catalog, execution, submission,
+identity) whose package seams are the extraction lines if a context's scaling ever measurably
+diverges. The designated first extraction is the run path.
+
+### 🛠️ Content checkout
+`Worker` · `git-sync sidecar`
+
+A sidecar that keeps a read-only clone of the content repository next to every origin replica —
+the physical form of the design's central idea: **content is derived data, a pure function of a
+git SHA.**
+
+**How publishing works**
+
+An author pushes Markdown → the sidecar pulls → the origin re-reads the checkout's HEAD SHA on the
+next request and stamps it into every content response as `contentVersion`. No image build, no
+restart, no cache purge: every cache keyed on the old SHA is simply *out of date by key*, and the
+edge refills against the new version within its TTL.
+
+**Why a checkout and not a database**
+
+Content has exactly **one writer** (git) and infinitely many readers — no multi-writer semantics,
+no conflict resolution, no replication protocol. The read model is recomputed from files; the
+hardest consistency question is *"may authors see their push within a minute?"* (yes — the freshness
+NFR tolerates 60 s). Per-pod clones replicate trivially because they're read-only derived state.
+
+### 🛠️ Code sandbox
+`Worker` · `go-judge`
+
+The only place untrusted code ever executes — and the component the threat model is written
+against: **assume the code is hostile.**
+
+**Isolation, layered (each layer assumes the previous one failed)**
+
+1. Fresh Linux namespaces (PID, mount, network, IPC) + cgroup quotas per execution: hard CPU
+   ceiling, memory ceiling, wall-clock timeout, output cap.
+2. **No network interface at all** — kills exfiltration, coin-mining, and staged payloads in one
+   stroke.
+3. Its own pod on a tainted, dedicated node pool with `NetworkPolicy` egress-deny: a full container
+   escape lands somewhere with nothing to read and nowhere to call.
+4. At fleet scale, a gVisor/Firecracker-class outer wall — the ratchet rule: capacity increases
+   ship with matching isolation hardening, in the same step.
+
+**Capacity (the napkin math)**
+
+~7 runs/s at the 1M-MAU peak × ~1 CPU-second per run → 10–20 dedicated cores with 5× burst
+headroom. Autoscales on in-flight runs; **warm process pools per language** keep p95 interactive
+(cold interpreter start is the latency budget's enemy); per-user concurrency caps stop one griefer
+from occupying the fleet. The only cost line that grows superlinearly with engagement.
+
+### 🗄️ Submissions store
+`Relational database` · `PostgreSQL`
+
+The only entity in the system that grows: submissions (user, problem, source, verdict, per-case
+results) plus the allowlist grants. Everything else is either derived from git (content) or
+ephemeral (runs).
+
+**Why one Postgres is the whole answer**
+
+The napkin math at 1M MAU: <1 submission/s, ~2 KB/row → ~400 MB/day worst case. Time-partitioned
+tables hold years of that on a single primary; older partitions archive to object storage. The
+sharding conversation has a written trigger — *"write volume breaks the napkin math"* — and until it
+fires, distributed-database complexity is deliberately not purchased.
+
+**The judging lifecycle it anchors**
+
+A submission row advances `pending → completed` as the judge runs the hidden suite. If the judge
+dies mid-suite, the row is still `pending`; a reaper re-enqueues stale rows and judging re-runs
+from the top — safe because verdict computation is **idempotent** (same source, same suite, same
+verdict), so at-least-once execution converges without exactly-once machinery.
+
+### 🪪 Identity provider
+`Identity provider` · `Keycloak`
+
+OIDC (authorization code + PKCE) — the platform owns **zero passwords** and delegates the entire
+credential lifecycle, including federated sign-in (e.g. GitHub).
+
+**The load-bearing property: it is on the login path only**
+
+Per request, the origin verifies the JWT's signature against this provider's public keys, cached
+(JWKS). No identity network call ever rides a read, run, or submit — so the IdP is sized for login
+bursts (tens/s even at 1M MAU), and an IdP outage degrades *sign-in*, not reading: anonymous
+reading is an availability decision disguised as a product decision.
+
+**Operational lessons carried in the design**
+
+- Usernames compare **canonicalized** (lowercase) everywhere — or `Alice` and `alice` silently
+  become two identities and surface later as a confusing 403.
+- The platform's admin credential against this provider is a service-account client scoped to one
+  permission on one realm — least-privilege by *named blast radius*: a stolen credential can
+  delete users in one realm, not administer them all.
+
+</details>
 
 ## ⚖️ Trade-offs
 

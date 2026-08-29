@@ -189,29 +189,130 @@ Now the expert layer worth pushing past: **what does *"this file is synced"* eve
 
 The checkmark on the uploading device honestly means 1 + 2 — *the source of truth has it*; it cannot mean 3, which isn't a single fact and never completes for a device that stays offline. WhatsApp pinned each tick to a machine-checkable event; this is the same honesty with different events, and the manifest commit is the hinge — flip visibility before durability is total and a device can be told to download chunks that don't exist. Order of operations *is* the correctness argument, and *"walk me through what each state of the status field promises"* is how a strong candidate closes this deep dive.
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `dropbox.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the sync agent. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_dropbox_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Dropbox — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-dropbox" root="System Context"
+direction: right
+
+classes: {
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+user: "User\n[Person]" {
+  class: client
+  shape: person
+}
+
+sys: "Dropbox\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+user -> sys: "edits files on any device"
+
+layers: {
+  container: {
+    direction: down
+
+    user: "User\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    agent: "Sync agent (device)\n[Desktop/mobile client]" {
+      class: client
+      link: _.layers.code
+    }
+
+    gw: "LB / API gateway\n[L7 gateway]" {
+      class: edge
+    }
+
+    fs: "File service\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    meta: "File metadata DB\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    blob: "Blob storage\n[S3-style object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    cdn: "CDN\n[CDN]" {
+      class: edge
+    }
+
+    notif: "Upload notifications\n[S3 events]" {
+      class: async
+      shape: queue
+    }
+
+    sync: "Sync channel\n[WebSocket + polling]" {
+      class: async
+    }
+
+    agent -> gw: "metadata ops: fingerprints, manifests, shares"
+    gw -> fs: "route"
+    fs -> meta: "manifest commits · permission checks"
+    fs -> blob: "mint presigned URLs"
+    agent -> blob: "chunk bytes: presigned PUT / GET"
+    agent -> cdn: "hot downloads"
+    cdn -> blob: "fill on miss"
+    blob -> notif: "chunk uploaded"
+    notif -> fs: "mark chunk in manifest"
+    fs -> sync: "change events"
+    sync -> agent: "file changed — pull new chunks"
+  }
+
+  code: {
+    direction: down
+
+    agent: "Sync agent (device)\n[Desktop/mobile client]" {
+      class: client
+
+      chunker: "Chunker" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/05-dropbox/agent/chunker.py"
+      }
+      manifest_differ: "ManifestDiffer" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/05-dropbox/agent/manifest_differ.py"
+      }
+      sync_engine: "SyncEngine" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/05-dropbox/agent/sync_engine.py"
+      }
+    }
+
+    fs: "File service\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    blob: "Blob storage\n[S3-style object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    agent.sync_engine -> agent.chunker: "chunk + hash"
+    agent.sync_engine -> agent.manifest_differ: "what moved?"
+    fs -> blob: "mint presigned URLs"
+    agent.sync_engine -> fs: "manifest ops"
+    agent.chunker -> blob: "presigned chunk PUT"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the sync agent (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_dropbox_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Dropbox — C4 code level (inside the sync agent)"
-></iframe>
 
 A **runnable implementation** lives at `_proof-of-concepts/07-case-studies/05-dropbox/` in the repo root — the sync agent (`Chunker`, `ManifestDiffer`, `SyncEngine`, mirroring the code view) against a FastAPI file service backed by a content-addressed chunk store in Postgres.
 
@@ -225,6 +326,235 @@ cd _proof-of-concepts/07-case-studies/05-dropbox
 `./run test` makes content-addressing pay off: device A pushes a file, device B **pulls an identical copy** from the chunk store; editing only the file's tail re-uploads **just the changed chunk** (the first chunk, unchanged, is reused); and pushing the same content at a new path uploads **zero** chunks — dedup, because the name *is* the hash.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>13 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 User
+`Actor` · `Human · multiple devices`
+
+The **User** of this design is really *several machines wearing one identity*: a laptop, a phone, a desktop — each holding a full local copy of the folder, each accepting edits immediately, each possibly **offline for days**. That last property is not an edge case; it is the design's defining input. A device that edits in an airport and reconnects a week later is, in DDIA's taxonomy, a multi-leader replica whose replication lag is measured in hours or days.
+
+**Responsibilities**
+
+- Edit files locally and expect them everywhere — without ever pressing an *"upload"* button; the sync agent watches the filesystem and does the rest.
+- Work offline as a first-class mode: reads and writes hit local disk, the UI never blocks on a round trip, and changes queue until connectivity returns.
+- Tolerate the one honest consequence of offline leadership: **conflicted copies**. Two devices editing the same file in mutual ignorance is guaranteed by construction, and the resolution surfaces to this actor as a second file to merge, never a silent overwrite.
+- Move file bytes directly against blob storage and the CDN over presigned URLs — the user's gigabytes never route through the app tier.
+
+**Where it breaks.** Users defeat every assumption of synchrony: they close laptop lids mid-upload, edit the same file on two offline devices, and carry clocks that can't order anything. The design answers with resumable content-addressed chunks, causal (not wall-clock) conflict detection, and keep-both resolution — engineering around the actor rather than constraining them.
+
+### 🏢 Dropbox
+`System` · `Presigned direct-to-blob · content-addressed chunks`
+
+**Dropbox** is cloud file storage at GB scale: upload from any device, download from any device, share, and keep every device's copy in sync. Its payloads reach **50 GB** — orders of magnitude past what a request/response body was designed to carry — and that one number dictates the architecture: the system splits into a **data plane** that moves bytes and a **metadata plane** that moves *facts about* bytes, and never lets the halves blur.
+
+**Responsibilities**
+
+- Move file bytes **directly between clients and blob storage** over presigned URLs — the app servers coordinate (permissions, grants, manifests) and exit the data path entirely.
+- Identify every 5–10 MB chunk by the **hash of its content**, so resume, cross-user dedup, and delta sync are all the same manifest lookup — one primitive, three features.
+- Make a file version visible in exactly one place: the **manifest-commit transaction** in the metadata store, which flips status only after blob storage itself has confirmed every chunk.
+- Converge a user's offline-capable devices — multi-leader replication in disguise — through the metadata store as the single source of truth, with conflicts kept, never silently dropped.
+
+The decisive design fact: the metadata store is the coordination point, and blob storage only knows chunks. *"Current version of file X"* has exactly one authoritative answer — the metadata row — and everything upstream of its commit may fail, repeat, or arrive out of order.
+
+**Where it grows.** Each plane scales on its own terms: the byte path rides blob-storage and CDN capacity, the stateless File Service scales horizontally, and the metadata DB grows with file *count*, not file *size* — a 50 GB upload costs it a ~10,000-entry manifest, not 50 GB.
+
+### 🖥️ Sync agent (device)
+`Desktop application` · `Desktop/mobile client`
+
+The **Sync agent** runs on every device and is the design's most unusual container: a distributed-systems participant living on hardware you don't control. It watches the local folder via OS filesystem events (FSEvents, FileSystemWatcher), and on any change chunks the file, hashes each chunk, and drives the upload — talking **metadata to the File Service and bytes to blob storage directly**, never routing a gigabyte through the app tier.
+
+**Responsibilities**
+
+- Detect local changes and push them remote: chunk (5–10 MB), SHA-256 each chunk, send the fingerprint list, upload only what the server says is missing.
+- Pull remote changes announced over the sync channel, fetching only changed chunks.
+- Queue work while offline and reconcile on reconnect — the agent is what DDIA calls a *sync engine*: capture, queue, ship, merge.
+- Resolve concurrent edits keep-both-copies, never by silent overwrite.
+
+Three classes carry that flow — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class Chunker {
+        +chunk(file) list~Chunk~
+        +hash(chunk) str
+    }
+    class ManifestDiffer {
+        +diff(local, remote) MissingChunks
+    }
+    class SyncEngine {
+        +sync(path)
+        +resolve_conflict(local, remote)
+    }
+    SyncEngine --> Chunker : chunk + hash
+    SyncEngine --> ManifestDiffer : what moved?
+    note for SyncEngine "sync(): upload missing chunks → commit manifest →\nvisibility flips atomically ·\nconflicts resolve keep-both, never silent overwrite"
+```
+
+Each class maps to a file in the POC at `06-case-studies/examples/dropbox/agent/` (deferred to the project's hands-on phase) — click the code-level boxes for their docs.
+
+**Where it breaks.** On its own honesty: the agent is the least trustworthy machine in the system, which is why it is trusted with nothing but bytes. It never marks a chunk uploaded (blob-store events do) and never decides the current version (the manifest commit does). A buggy or malicious agent can waste bandwidth; it cannot corrupt the source of truth.
+
+### 🧩 Chunker
+`Code` · `Python`
+
+**Chunker** is where a file stops being a file. `chunk(file)` splits it into 5–10 MB slices, and `hash(chunk)` names each slice by the SHA-256 of its content — the file's own fingerprint (the hash of the whole) becomes its `fileId`. It runs on the client, and it *must*: chunking on the server means the whole file reaches the server first, which was the problem. This class is the reason a 50 GB object becomes 10,000 independently transferable, independently retryable pieces that upload in parallel — with a progress bar falling out for free.
+
+**Responsibilities**
+
+- Split files into 5–10 MB chunks before any byte is transferred.
+- Compute the SHA-256 fingerprint of each chunk and of the whole file — the identifiers everything downstream (manifest, dedup, delta sync) keys on.
+- PUT chunk bytes directly to blob storage over presigned URLs — the one class in the agent that touches the data plane.
+
+**The invariant it protects: content addressing — hash = identity.** Same bytes, same name, regardless of filename, owner, or device; names lie, hashes don't. Everything the design gets *"for free"* is this invariant paying out: dedup (the hash already exists → don't send it), resume (re-uploading a stored chunk is a recognizable no-op), delta sync (unchanged bytes produce unchanged fingerprints).
+
+**Where it breaks.** Fixed boundaries. *Insert* bytes near the front of a file and every subsequent boundary shifts, every downstream hash changes, and delta sync degenerates to a full re-upload — the weakness content-defined chunking (rolling hashes, the rsync lineage) exists to fix, deliberately beyond this design's scope. Implemented in the forthcoming POC at `06-case-studies/examples/dropbox/agent/chunker.py`.
+
+### 🧩 ManifestDiffer
+`Code` · `Python`
+
+**ManifestDiffer** answers the only question a sync ever needs answered: *which chunks must move?* `diff(local, remote)` compares the local manifest — the fingerprint list the Chunker just produced — against the remote one the File Service holds, and returns the missing set. Everything the transfer layer does next is just acting on that answer.
+
+**Responsibilities**
+
+- Compare fingerprint lists, local vs remote, and return the chunks present on one side but not the other — for upload (what the server lacks) and for download (what this device lacks after a change event).
+- Reduce three user-facing features to the same computation: a **resume** is a diff against a partially uploaded manifest; a **dedup** hit is a diff that comes back empty; a **delta sync** is a diff where only the edited chunks differ.
+
+**The invariant it protects: only changed chunks ever travel.** No byte moves that the other side already holds. Edit one region of a 50 GB file and unchanged chunks produce unchanged fingerprints, so the diff is one chunk — 5 MB moves instead of 50 GB, a 10,000× saving from the same mechanism that made uploads resumable. The class is only possible because the Chunker's content addressing made fingerprints comparable across devices, users, and time: a diff of *names* would be meaningless; a diff of *content hashes* is the transfer plan.
+
+**Where it breaks.** Its answer is only as fresh as the remote manifest it diffed against — a stale read can propose re-sending chunks the server already confirmed, which content addressing makes harmless (a duplicate PUT of an existing key is a no-op) but not free. And it inherits the Chunker's fixed-boundary weakness: an insertion shifts every downstream fingerprint, and the honest diff is *"almost everything moved."* Implemented in the forthcoming POC at `06-case-studies/examples/dropbox/agent/manifest_differ.py`.
+
+### 🧩 SyncEngine
+`Code` · `Python`
+
+**SyncEngine** is the agent's state machine — the class that turns *"the watcher saw a change"* into *"every device converges."* `sync(path)` drives the pipeline: ask the Chunker for chunks and hashes, ask the ManifestDiffer what moved, upload the missing chunks, then ask the File Service to **commit the manifest** — the metadata transaction that flips the new version visible, atomically, everywhere at once.
+
+**Responsibilities**
+
+- Orchestrate `chunk + hash → diff → upload missing → commit` for local changes, and the mirror (`diff → download missing → apply`) for remote change events.
+- Queue work while offline and replay it on reconnect — the DDIA sync-engine loop: capture, queue, ship, merge.
+- `resolve_conflict(local, remote)`: on concurrent edits — causal concurrency, each side edited in ignorance of the other — **keep both copies**, materializing the loser as a conflicted copy beside the winner. Never a silent overwrite.
+
+**The invariant it protects: upload → commit → atomic visibility flip, in that order.** Durability strictly precedes visibility: the commit fires only after every chunk is storage-confirmed, so no other device is ever told to fetch bytes that don't exist. Until the flip, a crashed or abandoned sync leaves only invisible orphaned chunks — never a half-file anyone can download. The flip is the version's linearization point; everything before it may fail, repeat, or arrive out of order, and the engine is built to retry all of it (chunk PUTs are idempotent by content address).
+
+**Where it breaks.** At the conflict policy's edges: keep-both trades silent loss for visible clutter, and users editing on two devices mint conflicted copies faster than they merge them — the right trade for user files, but a real UX bill. Implemented in the forthcoming POC at `06-case-studies/examples/dropbox/agent/sync_engine.py`.
+
+### 🚪 LB / API gateway
+`API gateway` · `L7 gateway`
+
+The **LB / API gateway** fronts the metadata plane — and the most important fact about it is what *doesn't* pass through: file bytes. Only fingerprints, chunk manifests, share operations, and the change feed cross this hop; the heavy tonnage flows client ↔ blob storage on presigned URLs, entirely outside this container's world.
+
+**Responsibilities**
+
+- Terminate TLS, authenticate the session token/JWT riding in headers (identity never travels in request bodies), and route metadata operations to File Service instances.
+- Spread load across a stateless File Service fleet — trivially, because no request here carries payload weight or session affinity.
+- Enforce the boring edge concerns: rate limits, request-size limits, timeouts.
+
+That last point is why this design works at all. Default request-body limits — under 2 GB on Apache/NGINX, as low as 10 MB on managed API gateways — would strangle any architecture that tried to POST a 50 GB file through here. Rather than fighting those limits, the design embraces them as a feature: the gateway *should* refuse large bodies, because a large body arriving here means a client is misbehaving. Every legitimate request through this hop is small, fast, and cheap — a fingerprint list, a manifest commit, a share grant.
+
+**Where it breaks.** It mostly doesn't — that's the point of keeping it byte-free. Its failure modes are the generic L7 ones (connection exhaustion under a reconnect storm, misconfigured timeouts killing slow metadata queries), not anything this design created. If this gateway is your bottleneck, something upstream has leaked bytes into the metadata plane.
+
+### ⚙️ File service
+`Service` · `Python · FastAPI`
+
+The **File service** is the coordination brain that never touches a byte of file content. It sits in the control path and has deliberately exited the data path: it checks permissions, mints grants, and records facts, which is what lets it stay small, stateless, and horizontally boring while clients and blob storage carry the tonnage.
+
+**Responsibilities**
+
+- **Mint presigned URLs**: ask blob storage for a time-limited (~5 minute) grant authorizing exactly one operation — PUT this chunk, GET that object — after checking the metadata store that the caller may touch the file at all. Authorization stays server-side; bytes take the short path.
+- **Answer the dedup question**: given a client's fingerprint list, look up the manifest and return URLs for *missing* chunks only — chunks any user ever uploaded never travel again.
+- **Track manifest progress** from upload notifications — blob storage, not the client, is the witness that a chunk landed.
+- **Commit the manifest**: once every chunk is storage-confirmed, flip the file's status to `uploaded` in one metadata transaction. That flip is the file's linearization point — the single instant it becomes downloadable, shareable, and sync-announced.
+- Emit change events to the sync channel so other devices learn to pull.
+
+The ordering discipline is the correctness argument: visibility flips strictly *after* durability is total. Flip early and a sync peer can be told to fetch chunks that don't exist.
+
+**Where it breaks.** Two-system consistency is its permanent tax: blob storage and the metadata DB can each succeed while the other fails, so everything before the commit must be repeatable and invisible — orphaned durable-but-invisible chunks are the designed failure mode, cleaned by a reaper. And a lost upload notification leaves a manifest stuck at 9,999/10,000 forever unless a reconciliation sweep backstops the events.
+
+### 🗄️ File metadata DB
+`Relational database` · `PostgreSQL`
+
+The **File metadata DB** is the system of record for *what exists*. Blob storage holds bytes and knows only chunk hashes; this store holds the facts that make those bytes a file: **FileMetadata** (name, size, MIME type, owner, status `uploading`/`uploaded`), the **chunk manifest** (the ordered list of chunk fingerprints with per-chunk upload status), and **SharedFiles** (userId → fileId, so *"files shared with me"* is an indexed lookup, not a scan).
+
+**Responsibilities**
+
+- Hold the manifest that *is* the resume state: an interrupted upload is just a manifest with some chunks marked uploaded and some not — nothing else needs saving.
+- Execute the **manifest-commit transaction** — the atomic status flip that makes a version visible. This row is where *"current version of file X"* gets its single authoritative answer; every device's sync converges on it.
+- Back permission checks (via SharedFiles) before any presigned URL is minted.
+- Serve the change feed (`/files/changes?since=cursor`) that stale-file polling drains.
+
+The workload is document-shaped and low-relational — SDS reaches for DynamoDB and immediately concedes PostgreSQL would do fine; nothing in the design turns on that pick, and saying so is worth more than the pick. What the design *does* turn on: this store scales with file **count**, not file **size**. A 50 GB file costs it ~10,000 manifest entries — roughly a megabyte of metadata — trivially stored, non-trivially *updated* 10,000 times as chunk confirmations stream in.
+
+**Where it breaks.** It is the coordination point, so its write path is the ceiling on upload completion and sync fan-out — per-chunk manifest marks are the chatty part, and batching them is the first optimization. Lose a transaction's durability guarantee and the visibility flip stops meaning anything; this row's promises are the product.
+
+### 🪣 Blob storage
+`Object storage` · `S3-style object store`
+
+**Blob storage** holds every byte of every file — as **content-addressed chunks**, key = SHA-256 hash of the chunk's content. Devices PUT and GET here *directly* with presigned URLs; the application tier never carries, buffers, or parses file content. This container is consumed as a building block (its internals are a different interview): what it contributes is effectively unlimited capacity, redundancy that makes *"recoverable"* someone else's solved problem, and lifecycle policies for free.
+
+**Responsibilities**
+
+- Store and serve chunks keyed by content hash — same bytes, same key, regardless of name, owner, or device. Hash = identity is what makes dedup a lookup and re-uploading an existing chunk a harmless no-op.
+- Honor presigned grants: each URL authorizes exactly one operation on exactly one object for a few minutes, so authorization decisions stay on the File Service while enforcement happens here.
+- **Report completion**: fire an event notification when a chunk lands. The store, not the client, is the witness — the manifest reflects what storage actually holds.
+- Fill the CDN on miss; tier long-unread chunks to cheaper storage classes.
+
+Content addressing quietly changes ownership semantics: a chunk may be referenced by many manifests across many users (the second upload of a popular installer transfers approximately nothing), so no single file *"owns"* its bytes.
+
+**Where it breaks.** Exactly there: deletion. Reaping an abandoned upload's chunks is only safe if no *other* manifest references them — including one that claimed the chunk via dedup a moment ago. Reference-counting chunks across manifests is the real discipline, and it is where content addressing collects its operational tax. Note also the structural conflict: client-side per-user encryption makes identical files hash differently, so end-to-end encryption and cross-user dedup are directly at odds.
+
+### 🌍 CDN
+`CDN` · `CDN`
+
+The **CDN** is the download path's last rung: blob storage lives in a region, users don't, so frequently fetched files are served from an edge node near the requester. Security carries over from the presigned pattern — **signed CDN URLs** with a short (~5 minute) expiry, validated at the edge, so a leaked link self-expires and permission checks still happen server-side before any URL is minted.
+
+**Responsibilities**
+
+- Serve **hot** file downloads from edge caches; fill from blob storage on miss.
+- Validate URL signatures and expiry at the edge — no round trip to the File Service per download.
+- Cache *strategically*: CDNs bill for what they cache, so cache-control headers and invalidation keep only genuinely hot content at the edge, not every byte ever uploaded.
+
+The instructive part of this container is that it almost didn't make the cut — and in the sibling WhatsApp design, it *didn't*. A chat attachment has at most 100 recipients, so edge caching buys nothing there; a widely shared file here may be downloaded by thousands. Same pattern, opposite verdict, and the deciding variable is **read fan-out per object**. Saying that sentence in an interview is worth more than drawing the box: a CDN is not a default garnish, it's a bet that many readers will want the same bytes from many places.
+
+**Where it breaks.** On the wallet before anything technical: caching cold personal files at the edge is pure cost, since most files in a storage product are write-once, read-maybe-once, by one person. Signed-URL expiry adds a second sharp edge — a long download begun near the expiry boundary must complete on the established connection or fail, so lifetime tuning is a real operational knob, not a footnote.
+
+### 🌊 Upload notifications
+`Event stream` · `S3 events`
+
+**Upload notifications** are the asynchronous hop that closes the upload loop: when a chunk lands in blob storage, the store fires an event, and the File Service marks that chunk `uploaded` in the manifest. Small as it looks, this container carries the design's **trust boundary**.
+
+**Responsibilities**
+
+- Deliver "chunk `<hash>` landed" events from blob storage to the File Service, so manifest progress is tracked server-side.
+- Make blob storage — not the client — the witness of upload completion.
+
+Why this exists at all: the obvious alternative is the client PATCHing the manifest after each successful chunk PUT, and it is precisely the alternative SDS rejects. A client that reports its own upload status can lie — or merely be buggy — and either way the manifest ends up claiming chunks blob storage doesn't hold: corrupt state that surfaces later as a failed download on some other device. With storage-side events, a chunk is `uploaded` exactly when the store says it arrived, and the client is trusted with nothing but bytes. The manifest reflects reality because reality reports directly.
+
+This event stream is also what arms the visibility flip: only when *every* manifest entry is storage-confirmed does the File Service commit the manifest and make the version visible — durability strictly before visibility.
+
+**Where it breaks.** Event delivery is not a transaction. A lost notification leaves a manifest stuck at 9,999/10,000 — the file forever *almost*-visible while its bytes sit durable and complete. The backstop is a reconciliation sweep that re-lists blob storage against `uploading` manifests; measure what the sweep catches, because that's your event-loss rate telling on itself.
+
+### 🔔 Sync channel
+`Notification service` · `WebSocket + polling`
+
+The **Sync channel** carries one message in one direction: *"your file changed — pull the new chunks,"* from the File Service out to a user's *other* devices. It exists because requirement 4 — files sync automatically — needs devices to *learn* about remote changes, and the design refuses to make every device hammer the change feed constantly or hold a socket forever.
+
+**Responsibilities**
+
+- Push change events over a **WebSocket** for **fresh** files — recently edited, where near-real-time sync is what the user actually perceives.
+- Fall back to cheap **periodic polling** of `GET /files/changes?since={cursor}` for **stale** files — old, rarely touched, where a sync delay of minutes harms nobody.
+- Carry *notifications only*, never file bytes: a woken device pulls changed chunks through the normal presigned download path, with the metadata store as the source of truth both directions converge on.
+
+The hybrid is the point, and SDS argues it explicitly: a pure-WebSocket design pays for millions of mostly idle persistent connections (WhatsApp accepts that cost because instant delivery *is* the product; here it isn't), while pure polling either wastes requests or delivers the fresh-edit case too slowly. Splitting traffic by file freshness buys real-time behavior exactly where users notice and near-zero cost everywhere else.
+
+Delivery here is best-effort by design — a device that misses an event catches up on its next poll or reconnect, because the change feed cursor, not the push, is what guarantees convergence.
+
+**Where it breaks.** On the fresh/stale classifier and on reconnect storms. Misclassify an actively edited file as stale and collaboration feels broken while polling catches up. And like every socket tier, a server death orphans thousands of connections that redial at once — draining is an operational discipline, though here a missed event costs seconds of staleness, not lost data.
+
+</details>
 
 ## ⚖️ Trade-offs
 

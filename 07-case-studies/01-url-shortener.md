@@ -238,116 +238,44 @@ write -> cache: "populate on create" {style.stroke-dash: 3}
 db -> replica: "async replication" {style.stroke-dash: 3}
 ```
 
-The whole final architecture once more, in C4 Container notation — pan and zoom to inspect each container and edge (rendered live from this module's `c4/url-shortener.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the API service. Any box carrying a link
+badge drills down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_urlshortener_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="URL shortener — C4 Container view (final architecture)"
-></iframe>
-
-<div style="border-left:4px solid #15448e;background:rgba(21,68,142,0.08);padding:0.6rem 1rem;border-radius:0 0.5rem 0.5rem 0;margin:1.25rem 0">
-
-📘 **Evaluation in progress.** Below is a D2 **walkthrough** covering the same ground as the two LikeC4 embeds on this page — placed here so the two approaches can be compared side by side. The 14 existing `.c4` models are unchanged and stay as they are; the walkthrough is how *new* case studies will be drawn. Its boards are compiled to SVG at build time and inlined, so they render even when the `/c4` service is down.
-
-</div>
-
-The same architecture as a **D2 walkthrough** — one source, three boards. Click **URL Shortener**
-to drop into the containers, then the **API service** to reach the code level; ◀ ▶ ⌂ step back out.
-
-```d2 boards name="url-shortener" root="System Context"
+```d2 boards name="c4-url-shortener" root="System Context"
 direction: right
 
 classes: {
-  actor: {style: {fill: "#f3f4f6"; stroke: "#6b7280"}}
-  svc:   {style: {fill: "#dcfce7"; stroke: "#16a34a"}}
-  data:  {style: {fill: "#ffedd5"; stroke: "#ea580c"}}
-  async: {style: {fill: "#f3e8ff"; stroke: "#9333ea"}}
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
 }
 
-creator: "Link creator\n[Person]" {
+user: "User\n[Person]" {
+  class: client
   shape: person
-  class: actor
 }
 
-visitor: "Link visitor\n[Person]" {
-  shape: person
-  class: actor
-}
-
-shortener: "URL Shortener\n[Software System]\nread-heavy, roughly 100:1" {
+sys: "URL Shortener\n[Software System]" {
   class: svc
   link: layers.container
 }
 
-analytics: "Analytics pipeline\n[Downstream]" {
-  class: async
-}
-
-creator -> shortener: "POST /links"
-visitor -> shortener: "GET /{code} -> 302"
-shortener -> analytics: "click events" {style.stroke-dash: 3}
+user -> sys: "HTTPS: create links, follow short codes"
 
 layers: {
   container: {
     direction: right
 
-    visitor: "Link visitor" {
+    user: "User\n[Person]" {
+      class: client
       shape: person
-      class: actor
     }
 
-    api: "API service\n[Python - FastAPI]\nstateless; no coordination on the read path" {
+    api: "API service\n[Python · FastAPI]" {
       class: svc
       link: _.layers.code
-    }
-
-    cache: "Redirect cache\n[Redis]\nhot code to long URL" {
-      class: data
-      shape: cylinder
-    }
-
-    db: "Link store\n[PostgreSQL]\nunique index on code; system of record" {
-      class: data
-      shape: cylinder
-    }
-
-    range: "ID range allocator\n[PostgreSQL]\nsingle fetch-and-add row" {
-      class: data
-      shape: cylinder
-    }
-
-    clicks: "Click stream\n[Redis Stream]" {
-      class: async
-    }
-
-    visitor -> api: "GET /{code}"
-    api -> cache: "hit path, microseconds to ms"
-    api -> db: "miss-path reads, new-link writes"
-    api -> range: "lease code range (rare, amortized)"
-    api -> clicks: "click event (fire-and-forget)" {style.stroke-dash: 3}
-  }
-
-  code: {
-    direction: right
-
-    redirect: "RedirectHandler\nGET /{code}: cache, then store, then 302" {
-      class: svc
-    }
-
-    creator_cls: "LinkCreator\nPOST /links: validate, next id, encode, insert" {
-      class: svc
-    }
-
-    codec: "Base62Codec\ncounter id to short code\npure functions, no I/O" {
-      class: svc
-    }
-
-    lease: "RangeLease\nleases disjoint ranges, serves ids locally\ncrash gives gaps, never duplicates" {
-      class: svc
     }
 
     cache: "Redirect cache\n[Redis]" {
@@ -360,46 +288,77 @@ layers: {
       shape: cylinder
     }
 
-    range: "ID range allocator\n[PostgreSQL]" {
+    range: "ID range allocator\n[PostgreSQL (sequence table)]" {
       class: data
       shape: cylinder
     }
 
     clicks: "Click stream\n[Redis Stream]" {
       class: async
+      shape: queue
     }
 
-    creator_cls -> codec: "encode(id)"
-    creator_cls -> lease: "next id"
-    creator_cls -> db: "INSERT link"
-    lease -> range: "lease a range"
-    redirect -> cache: "lookup"
-    redirect -> db: "on miss"
-    redirect -> clicks: "click event" {style.stroke-dash: 3}
+    api -> cache: "GET code (hit path, ~µs–ms)"
+    api -> db: "miss path reads · new-link writes"
+    api -> range: "lease code range (rare, amortized)"
+    api -> clicks: "click event (fire-and-forget)"
+  }
+
+  code: {
+    direction: down
+
+    api: "API service\n[Python · FastAPI]" {
+      class: svc
+
+      link_creator: "LinkCreator" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/01-url-shortener/domain/link_creator.py"
+      }
+      base62_codec: "Base62Codec" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/01-url-shortener/domain/base62_codec.py"
+      }
+      range_lease: "RangeLease" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/01-url-shortener/domain/range_lease.py"
+      }
+      redirect_handler: "RedirectHandler" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/01-url-shortener/domain/redirect_handler.py"
+      }
+    }
+
+    cache: "Redirect cache\n[Redis]" {
+      class: data
+      shape: cylinder
+    }
+
+    db: "Link store\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    range: "ID range allocator\n[PostgreSQL (sequence table)]" {
+      class: data
+      shape: cylinder
+    }
+
+    clicks: "Click stream\n[Redis Stream]" {
+      class: async
+      shape: queue
+    }
+
+    api.link_creator -> api.range_lease: "next id"
+    api.link_creator -> api.base62_codec: "encode(id)"
+    api.redirect_handler -> cache: "lookup"
+    api.redirect_handler -> clicks: "click event"
+    api.range_lease -> range: "lease [from, to)"
+    api.link_creator -> db: "INSERT link"
   }
 }
 ```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the decisive service (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_urlshortener_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="URL shortener — C4 code level (inside the API service)"
-></iframe>
-
-**What the comparison shows.** The walkthrough carries the whole C4 stack — context, containers,
-and the code level inside the API service — in **one** fence the reader drives, where the LikeC4
-version needs two separate embeds and a running service. What it gives up is the per-element
-Details tab: the 11 click-docs in `_c4-docs/` have no equivalent here, so that material would move
-into the prose or be dropped. Right now the `/c4` service is returning 502 on this machine, so the
-two iframes above are blank while this walkthrough draws — which is the durability argument made
-concrete rather than asserted.
 
 A **runnable implementation** of this exact design lives at `_proof-of-concepts/07-case-studies/01-url-shortener/` in the repo root — FastAPI + Postgres + Redis via docker-compose, with the four classes above (`LinkCreator`, `Base62Codec`, `RangeLease`, `RedirectHandler`) mirroring the code view 1:1. Start it and watch the design's claims become concrete:
 
@@ -412,6 +371,211 @@ cd _proof-of-concepts/07-case-studies/01-url-shortener
 Then observe the two moves this case study turns on: create five links and hit `/stats` to see `ranges_leased` stay at **1** while `ids_issued` climbs — the allocator row is touched once per *thousand* writes, not once per write; and hammer one code to watch `redirect.hit_ratio` climb toward 1.0 as Redis absorbs the read skew. Restart the API and the next code jumps forward by a whole batch — the crash-safety property made visible: **leased-but-unused ids are lost, never reissued**. `./run stop` tears it down.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>11 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 User
+`Actor` · `Browser or mobile app`
+
+The **User** is anyone on either side of a short link: the person who creates one, and the (far more numerous) people who click one. That asymmetry is the whole system in miniature — a link is created once and clicked forever, which is why the architecture behind this box is built almost entirely for reads.
+
+**Responsibilities**
+
+- Create short links: `POST /links` with a long URL, optionally a custom alias and an expiration date.
+- Follow short links: `GET /{code}`, receiving a `302 Found` whose `Location` header the browser follows automatically — the user never sees a page from this system at all.
+
+The user's browser is quietly part of the design. Because the redirect is a `302` (temporary), every click — first or repeat — comes back to the system, which keeps click analytics possible and links revocable. A `301` would invite the browser to cache the redirect itself: free capacity, but repeat clicks would vanish from view permanently.
+
+**Where it grows.** One of these users is eventually a celebrity, and one click becomes hundreds of thousands per second on a single code — viral traffic is overwhelmingly *first* clicks from *distinct* browsers, so browser-side caching can't absorb it. Everything downstream of this actor is shaped by that moment.
+
+### 🏢 URL Shortener
+`System` · `HTTPS · read-optimized web service`
+
+The **URL Shortener** turns a long URL into a code like `15ftgG` and redirects anyone who opens it. The product fits in one sentence; the design is decided by two facts hiding inside it.
+
+**Responsibilities**
+
+- Accept a long URL (optionally a custom alias and expiration) and return a short one.
+- Redirect every `GET /{code}` to the original URL in well under 100 ms, at 99.99% availability.
+- Never let two long URLs share a short code — uniqueness is the hardest requirement on the board.
+
+The first structural fact: **reads dwarf writes**. At 100M DAU the read side averages ~5,800 redirects/second (spiking far higher), while new links arrive at roughly *one per second*. So this is a read-scaling problem wearing a CRUD costume: a cache and read replicas, not shards — 1B rows is only ~500 GB, a dataset one database node holds without noticing.
+
+The second: **uniqueness under concurrency is the only true distributed-systems problem here**. Hashing collides at scale (birthday math: ~8.8M expected collisions at 1B codes in 6 base62 characters); a counter is unique by construction but becomes a shared object every writer depends on. The design's answer is batched counter ranges — see the ID range allocator.
+
+**Where it breaks.** The failure surface is concentrated in two places: the counter's failover (a stale counter re-issues ranges — duplicate codes, the one unforgivable event) and hot keys (one viral link lands on one cache node, because hashing spreads keys, not load).
+
+### ⚙️ API service
+`Service` · `Python · FastAPI`
+
+The **API service** is the only compute in the system: it owns both endpoints and stays deliberately **stateless** — any node can serve any request, so scaling is simply adding nodes behind the load balancer. The one piece of per-node state it holds, a leased counter range, is designed to be safely *lost* (a crash abandons the range; gaps, never duplicates).
+
+**Responsibilities**
+
+- `POST /links`: validate the long URL, mint a unique short code, insert the mapping into the link store.
+- `GET /{code}`: resolve the code — cache first, store on a miss — and answer `302 Found`.
+- Emit a click event per redirect, fire-and-forget, so analytics never adds latency to the hot path.
+
+Internally it is four classes with one-way dependencies — the write path (`LinkCreator → RangeLease → Base62Codec`) and the read path (`RedirectHandler`) share nothing, which is what makes *"no coordination on the read path"* literally true:
+
+```mermaid
+classDiagram
+    class LinkCreator {
+        +create(long_url, alias) Link
+    }
+    class RangeLease {
+        -lo: int
+        -hi: int
+        +next_id() int
+    }
+    class Base62Codec {
+        +encode(id) str
+        +decode(code) int
+    }
+    class RedirectHandler {
+        +resolve(code) str
+    }
+    LinkCreator --> RangeLease : next id
+    LinkCreator --> Base62Codec : encode(id)
+```
+
+Each class mirrors a file in the runnable POC at `06-case-studies/examples/url-shortener/app/` — click the code-level boxes for their docs.
+
+**Where it grows.** Statelessness means the service itself never becomes the bottleneck — pressure always lands downstream, on the cache (hot keys), the store (miss traffic), or the allocator (failover). If read and write traffic ever need independent scaling or isolation, the four classes split cleanly into separate read and write services along the dependency seam above.
+
+### 🧩 LinkCreator
+`Code` · `Python`
+
+**LinkCreator** is the write path in one class: everything `POST /links` does between receiving a long URL and returning a short one.
+
+**Responsibilities**
+
+- Validate the long URL (and the optional custom alias, when offered).
+- Take the **next id** from the node's **RangeLease** — a local, in-memory operation on the amortized-lease design, no allocator round trip.
+- Turn the id into a code via **Base62Codec** and `INSERT` the `code → long URL` row into the link store, unique index on `code` as belt-and-braces.
+
+The class embodies the lesson's chosen strategy — *uniqueness by construction*. It never hashes, never generates-and-checks, never retries on collision: the id it encodes came from a range no other node holds, so the code is unique before the database ever sees it. The dependency arrows are one-way and the read path (`RedirectHandler`) shares none of them, which is what makes *"no coordination on the read path"* literally true.
+
+**The invariant it protects:** every code it mints comes from the leased range and is used exactly once — so two concurrent creates, on this node or any other, can never produce the same code.
+
+**Where it grows.** At ~1 write/second the class is nowhere near a bottleneck; its natural evolution is a write-time cache fill (populate the redirect cache on create), which closes the replication-lag 404 on brand-new links. Implemented in the forthcoming POC at `06-case-studies/examples/url-shortener/app/link_creator.py`.
+
+### 🧩 Base62Codec
+`Code` · `Python`
+
+**Base62Codec** is the smallest class in the system and the one carrying the product's name: it turns counter ids into *short* URLs.
+
+**Responsibilities**
+
+- `encode(id)`: integer → base62 string over `a–z A–Z 0–9` — the lesson's alphabet choice, picked over base64 because `+` and `/` collide with URL syntax.
+- `decode(code)`: the exact inverse, used wherever a code must map back to its id.
+
+The arithmetic is why 62 symbols suffice: six characters give 62⁶ ≈ 56.8 billion codes against a 1-billion-link requirement — `1,000,000,000` encodes as `15ftgG` — and codes only gain a character at each power of 62, so they stay as short as the space allows.
+
+Deliberately, this is a **pure function pair**: no I/O, no state, no clock. That makes it trivially testable (round-trip every boundary value) and means correctness here is a unit test, not an integration concern.
+
+**The invariant it protects:** `encode` and `decode` are a strict bijection — `decode(encode(n)) == n` for every id, and distinct ids never encode to the same code. Uniqueness of codes is exactly uniqueness of ids passed in; the codec can neither create nor destroy it.
+
+**Where it grows.** Sequential inputs make codes enumerable (`15ftgG` implies `15ftgF` exists); deployments that care insert a cheap bijective scramble between counter and codec — the bijection property is what makes that a drop-in. Implemented in the forthcoming POC at `06-case-studies/examples/url-shortener/app/base62_codec.py`.
+
+### 🧩 RangeLease
+`Code` · `Python`
+
+**RangeLease** is the class that removes the global counter from the write path. Instead of one allocator round trip per link, it leases a *block* of ids — `[from, to)`, via a single batched fetch-and-add on the **ID range allocator** — and serves `next_id()` from local memory until the block runs dry.
+
+**Responsibilities**
+
+- Lease a fresh disjoint range from the allocator when none is held, and refresh **before exhaustion** so a lease round trip never lands in a request's latency.
+- Serve `next_id()` locally — an increment, not a network call — making writes collision-free with zero coordination between API nodes.
+- On restart, hold nothing: a new node simply leases a new range.
+
+The design's two deliberate consequences live here. A node that crashes mid-range abandons the unissued remainder — the sequence has gaps, which are harmless because the requirement is uniqueness, not density. And global creation order is gone once several nodes hold ranges — which costs nothing, since codes are opaque names nobody compares.
+
+**The invariant it protects:** a crash produces **gaps, never duplicates**. RangeLease never persists its cursor and never resumes an old range; because the allocator advanced its high-water mark *before* releasing the lease, recovery over-skips rather than repeats, and no id is ever served twice.
+
+**Where it breaks.** Only through its supplier: an allocator that fails over onto stale state can re-issue a range, and duplicate ids become duplicate codes. The class itself cannot detect that — the defense lives in the allocator's durability. Implemented in the forthcoming POC at `06-case-studies/examples/url-shortener/app/range_lease.py`.
+
+### 🧩 RedirectHandler
+`Code` · `Python`
+
+**RedirectHandler** is the hot path: `GET /{code}` at ~100:1 read skew, inside a 100 ms budget, spiking toward the design's peak. Everything about the class is shaped by that budget.
+
+**Responsibilities**
+
+- Look the code up in the **redirect cache** first — the hit path answers from memory.
+- On a miss, fall through to the **link store** (a primary-key point read), populate the cache with a TTL, and continue.
+- Answer `302 Found` with the long URL — `302`, not `301`, so clicks stay observable and links stay revocable.
+- Emit a click event onto the **click stream**, fire-and-forget, *after* the redirect is already decided.
+
+Note what the class does **not** touch: the range allocator, the codec, the write path. Its only collaborators are the cache, the store, and the stream — reads need no coordination with anything, which is why redirect capacity is just *"add nodes."* The workload it serves is caching's best case: a code's target never changes, so the cache's classic coherence problem barely exists and hit ratio reduces to size plus skew.
+
+**The invariant it protects:** the redirect never waits on anything but the lookup itself — no click write, no analytics call, no cross-node chatter sits between request and `302`.
+
+**Where it breaks.** Cold viral links: the instant a code goes hot it isn't cached, and thousands of concurrent misses stampede the store for one row. Write-time cache population blunts the common case (links go viral young); request coalescing is the general fix. Implemented in the forthcoming POC at `06-case-studies/examples/url-shortener/app/redirect_handler.py`.
+
+### ⚡ Redirect cache
+`Cache` · `Redis`
+
+The **Redirect cache** holds hot `code → long URL` entries in memory so most redirects never touch the database. It exists because of arithmetic: memory answers in ~100 ns versus ~0.1 ms for SSD, and a single cache node serves 100k+ operations/second where a database node manages tens of thousands — and this system's reads outnumber its writes by orders of magnitude.
+
+**Responsibilities**
+
+- Answer the hit path of `GET /{code}` from memory.
+- On a miss, let the request fall through to the link store; the handler populates the entry with a TTL on the way back (cache-aside).
+- Hold entries populated at *creation* time — fresh links are the likeliest clicks, and a write-time fill serves them without touching a replica (it also sidesteps the replication-lag 404 on a brand-new link).
+
+This is a dream caching workload: a code's target never changes, so the mapping is effectively immutable and cache coherence — normally caching's hard problem — barely exists. The only invalidation events are expiration and deletion. Hit ratio reduces to cache size plus traffic skew, and skew helps: clicks concentrate on recent and popular links, so a cache holding a small fraction of 1B mappings absorbs most reads. Operationally, hit ratio is *the* dashboard metric — it moves before p99 does.
+
+**Where it breaks.** Hot keys. Hashing across a cache cluster spreads *keys* evenly, not *load*: one viral code lives on one node, which takes all of its traffic while its neighbors idle. The value being immutable makes the fix trivially safe — replicate the hot entry across several nodes and fan reads out among them.
+
+### 🗄️ Link store
+`Relational database` · `PostgreSQL`
+
+The **Link store** is the system of record: one table of `code → long URL` rows (plus creation time, optional expiration and alias, creator), with a unique index on the code. The hot path touches exactly one entity — no joins, no cross-entity transactions — so every lookup is a primary-key point read, the cheapest question a database answers.
+
+**Responsibilities**
+
+- Persist every mapping durably; serve as the source of truth the cache is filled from.
+- Serve the read path's *miss* traffic — the small fraction of redirects the cache doesn't absorb.
+- Accept new-link inserts, where the unique index on `code` is the last line of defense for the uniqueness requirement.
+
+The numbers here are the design's most counterintuitive lesson. One billion rows at ~500 bytes is **~500 GB** — a dataset one modern node holds without noticing — and writes arrive at roughly **one per second**. So there is no sharding and no write-scaling machinery; proposing them is the classic estimation mistake on this problem. What the store *does* need is redundancy and read headroom: leader–follower replication with reads on followers, because 99.99% availability forbids a single copy and misses still have to land somewhere.
+
+**Where it breaks.** Replication lag, in one user-visible way: create a link, share it instantly, and the first click may hit a follower that hasn't seen the row — a 404 on a brand-new link. The one-line fix lives upstream: populate the redirect cache at creation time. The other pressure point is a cold viral key stampeding the miss path — also blunted by that same write-time fill, since links go viral young.
+
+### 🗄️ ID range allocator
+`Relational database` · `PostgreSQL (sequence table)`
+
+The **ID range allocator** is one integer with strong opinions: a single fetch-and-add row that hands out disjoint counter ranges — `[from, to)` — to API nodes. It exists because uniqueness by construction beats collision checking (hashing to 6 base62 characters yields ~8.8M expected collisions at 1B codes), but a *per-write* global counter would put a single round trip, throughput ceiling, and point of failure on every insert. Batching is the pressure release: lease ~1,000 ids at a time and the allocator is contacted once per thousand writes.
+
+**Responsibilities**
+
+- Atomically advance the counter by the batch size and return the leased range — disjoint ranges are what make concurrent API nodes collision-free with zero coordination between them.
+- Persist the new high-water mark durably **before** the range is released to the caller — so recovery over-skips rather than repeats.
+
+Two consequences are deliberate. Crashed API nodes abandon the unissued remainder of their range, so the code sequence has gaps — harmless, because the requirement is uniqueness, not density (gaps are even useful: they tell on your crash rate). And global creation order is quietly gone once several nodes hold outstanding ranges — which costs nothing, since codes are opaque names nobody compares.
+
+**Where it breaks.** Failover. If the allocator's state replicates asynchronously and it fails over, the replica may have missed the latest advance — and a stale counter re-issues a range, meaning **duplicate codes**, the one unforgivable event in this system. The fix is not *"add Raft"* as a slogan; it is one sentence: this tiny state must survive failover without losing acknowledged increments. Alarm on issued-range history — a re-issue is a catastrophe in progress.
+
+### 🌊 Click stream
+`Event stream` · `Redis Stream`
+
+The **Click stream** is the design's async boundary: a queue that carries one small event per redirect into the analytics pipeline, so that counting clicks never adds a microsecond to serving them. It exists because the lesson chose `302` over `301` precisely to *keep* click data — and then must make that data free on the hot path.
+
+**Responsibilities**
+
+- Accept a click event from the **RedirectHandler**, **fire-and-forget** — the `302` is already on its way before the event lands; a redirect never waits on a click write.
+- Buffer bursts (a viral link means hundreds of thousands of clicks per second on one code) as *lag* in the stream, not as latency on redirects.
+- Feed downstream analytics consumers at their own pace.
+
+The asymmetry is the design decision: redirects have a 100 ms budget and a four-nines target; click counts have neither. Splitting them means the analytics pipeline can fall behind, restart, or be rebuilt without the redirect path noticing.
+
+**Where it breaks.** Fire-and-forget means exactly what it says: an API node that crashes between sending the `302` and emitting the event loses that click, and nobody reconciles it. That is a deliberate trade — approximate analytics for an untouched hot path — but say it out loud, because *"clicks"* quietly becoming *"billing"* would invalidate it. The metric to watch is consumer lag age, not stream depth: a stalled consumer with a shallow-looking stream is still an outage for analytics.
+
+</details>
 
 ## ⚖️ Trade-offs
 

@@ -233,35 +233,26 @@ Applied to this feed, the layered production answer (rule of thumb, not from sou
 
 **Going deeper — the feed also shouldn't time-travel.** Refresh twice and let the second read land on a *laggier* replica than the first: a post you just saw vanishes — time moving backward. The guarantee that forbids it is **monotonic reads**, weaker than strong consistency but stronger than eventual; the classic implementation routes each user's reads to the same replica, chosen by a hash of the user ID <abbr title="[ch. 6 pp. 212–213]">[i]</abbr>. And take DDIA's design rule with you: decide *now* how the app behaves if lag grows to minutes — if the answer is *"badly,"* design the guarantee in rather than pretending asynchronous replication is synchronous <abbr title="[ch. 6 p. 214]">[i]</abbr>.
 
-The hybrid design end-to-end, in C4 Container notation — pan and zoom (rendered live from this module's `c4/news-feed.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the decisive service. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_newsfeed_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="News feed — C4 Container view (hybrid fan-out)"
-></iframe>
-
-News Feed again as a **D2 walkthrough** — one source, three boards. Click **News Feed** to drop into the containers, then **the Feed API** to reach the code level; ◀ ▶ ⌂ step back out.
-
-```d2 boards name="news-feed" root="System Context"
+```d2 boards name="c4-news-feed" root="System Context"
 direction: right
 
 classes: {
-  actor: {style: {fill: "#f3f4f6"; stroke: "#6b7280"}}
-  svc:   {style: {fill: "#dcfce7"; stroke: "#16a34a"}}
-  data:  {style: {fill: "#ffedd5"; stroke: "#ea580c"}}
-  async: {style: {fill: "#f3e8ff"; stroke: "#9333ea"}}
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
 }
 
-user: "User\n[Person]\nposts, follows, reads a feed" {
+user: "User\n[Person]" {
+  class: client
   shape: person
-  class: actor
 }
 
-sys: "News Feed\n[Software System]\n~5.8k posts/s x ~200 followers\nis 1M+ timeline writes/s" {
+sys: "News Feed\n[Software System]" {
   class: svc
   link: layers.container
 }
@@ -270,67 +261,16 @@ user -> sys: "HTTPS: post, follow, read feed"
 
 layers: {
   container: {
-    direction: right
+    direction: down
 
-    user: "User" {
+    user: "User\n[Person]" {
+      class: client
       shape: person
-      class: actor
     }
 
-    api: "Feed API\n[Python - FastAPI]\npost creation and timeline reads\nreads are ids-then-hydrate" {
+    api: "Feed API\n[Python · FastAPI]" {
       class: svc
       link: _.layers.code
-    }
-
-    queue: "Fan-out queue\n[Redis Stream]\nthe async boundary of the design" {
-      class: async
-    }
-
-    workers: "Fan-out workers\n[Python worker]\ninsert the post id into each follower timeline" {
-      class: svc
-    }
-
-    posts: "Post store\n[PostgreSQL]\nsystem of record" {
-      class: data
-      shape: cylinder
-    }
-
-    graph: "Follow graph store\n[PostgreSQL]\nfollower / followee edges" {
-      class: data
-      shape: cylinder
-    }
-
-    timelines: "Timeline cache\n[Redis]\nmaterialized home timelines, post ids only" {
-      class: data
-      shape: cylinder
-    }
-
-    user -> api: "HTTPS"
-    api -> posts: "write post, hydrate ids"
-    api -> timelines: "read timeline ids (+ celebrity merge)"
-    api -> queue: "post event (async)" {style.stroke-dash: 3}
-    queue -> workers: "deliver post events" {style.stroke-dash: 3}
-    workers -> graph: "read follower lists"
-    workers -> timelines: "insert post id per follower"
-  }
-
-  code: {
-    direction: right
-
-    reader: "TimelineReader\nGET /feed: materialized id list,\nhydrate bodies, page by cursor" {
-      class: svc
-    }
-
-    merger: "CelebrityMerger\nread-time half of the hybrid:\nlive-query celebrities, merge two sorted streams" {
-      class: svc
-    }
-
-    consumer: "FanoutConsumer\nat-least-once from the queue\nredelivery-safe: the insert is idempotent" {
-      class: svc
-    }
-
-    fanout: "TimelineFanout\nidempotent insert per follower\nskips celebrity authors" {
-      class: svc
     }
 
     posts: "Post store\n[PostgreSQL]" {
@@ -343,34 +283,92 @@ layers: {
       shape: cylinder
     }
 
+    queue: "Fan-out queue\n[Redis Stream]" {
+      class: async
+      shape: queue
+    }
+
+    workers: "Fan-out workers\n[Python worker]" {
+      class: svc
+      link: _.layers.code
+    }
+
     timelines: "Timeline cache\n[Redis]" {
       class: data
       shape: cylinder
     }
 
-    reader -> merger: "merge streams"
-    reader -> timelines: "LRANGE ids"
-    reader -> posts: "hydrate"
-    merger -> posts: "recent celebrity posts"
-    consumer -> fanout: "fan out(post)"
-    fanout -> graph: "followers(author)"
-    fanout -> timelines: "idempotent insert"
+    api -> posts: "write post · hydrate ids"
+    api -> queue: "post event (async)"
+    queue -> workers: "deliver post events"
+    workers -> graph: "read follower lists"
+    workers -> timelines: "insert post id per follower"
+    api -> timelines: "read timeline ids (+ celebrity merge)"
+  }
+
+  code: {
+    direction: down
+
+    api: "Feed API\n[Python · FastAPI]" {
+      class: svc
+
+      timeline_reader: "TimelineReader" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/03-news-feed/domain/timeline_reader.py"
+      }
+      celebrity_merger: "CelebrityMerger" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/03-news-feed/domain/celebrity_merger.py"
+      }
+    }
+
+    workers: "Fan-out workers\n[Python worker]" {
+      class: svc
+
+      fanout_consumer: "FanoutConsumer" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/03-news-feed/domain/fanout_consumer.py"
+      }
+      timeline_fanout: "TimelineFanout" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/03-news-feed/domain/timeline_fanout.py"
+      }
+    }
+
+    queue: "Fan-out queue\n[Redis Stream]" {
+      class: async
+      shape: queue
+    }
+
+    timelines: "Timeline cache\n[Redis]" {
+      class: data
+      shape: cylinder
+    }
+
+    graph: "Follow graph store\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    posts: "Post store\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    api.timeline_reader -> api.celebrity_merger: "merge streams"
+    workers.fanout_consumer -> workers.timeline_fanout: "fan out(post)"
+    api -> queue: "post event (async)"
+    queue -> workers: "deliver post events"
+    api.timeline_reader -> timelines: "LRANGE ids"
+    api.timeline_reader -> posts: "hydrate"
+    api.celebrity_merger -> posts: "recent celebrity posts"
+    workers.timeline_fanout -> graph: "followers(author)"
+    workers.timeline_fanout -> timelines: "idempotent insert"
   }
 }
 ```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the decisive service (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_newsfeed_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="News feed — C4 code level (fan-out pipeline + read path)"
-></iframe>
 
 A **runnable implementation** lives at `_proof-of-concepts/07-case-studies/03-news-feed/` in the repo root — a FastAPI feed API and a **separate fan-out worker**, over Postgres + Redis (Stream queue + timeline cache). The four classes above (`TimelineReader`, `CelebrityMerger`, `FanoutConsumer`, `TimelineFanout`) mirror the code view 1:1.
 
@@ -384,6 +382,233 @@ cd _proof-of-concepts/07-case-studies/03-news-feed
 `./run test` makes the hybrid concrete: a **normal** author's post is fanned out on write into a follower's materialized timeline (visible at `GET /timeline/{id}`), while a **celebrity** author's post is *skipped* by the worker — absent from the materialized timeline, yet still present in `GET /feed` tagged `"source": "celebrity-merge"`, pulled in at read time and merged by time order. That split — push for the many, pull for the few — is the whole design.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>12 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 User
+`Actor` · `Human · HTTPS`
+
+The **User** is the only actor in the model, and they generate both sides of the fan-out arithmetic: they *post* (rarely — 5,800 posts/s across the whole system) and they *read their feed* (constantly — 2 million feed queries/s when 10M concurrent users poll every 5 seconds). That asymmetry, roughly 400:1 in favor of reads, is why the system does its expensive work at write time.
+
+**Responsibilities**
+
+- Create posts (`POST /posts`) — each one becomes ~200 timeline writes downstream, on average.
+- Follow other users — a uni-directional edge that decides whose posts land in their feed.
+- Read the home timeline (`GET /feed`), paging back with a cursor.
+
+Everything reaches the system over HTTPS through the **Feed API**; the user never sees the queue, the workers, or the caches behind it.
+
+**Where it breaks.** Users are also the design's consistency oracle: the one anomaly they reliably notice is *their own* post missing after a reflex refresh — the read-your-writes gap the lesson's third deep dive exists for. And the tail of this actor population (accounts with 100M+ followers) is what forces the hybrid: designing for the *average* user is the trap.
+
+### 🏢 News Feed
+`System` · `Hybrid fan-out (push + read-time merge)`
+
+The **News Feed** system answers one question fast — *"what did the people I follow post, newest first?"* — for 2 billion users. One piece of arithmetic rules every box inside it: computing the feed at read time costs **400M lookups/s** (2M polling queries × ~200 followed accounts), while precomputing it at write time costs **~1M timeline writes/s** (5,800 posts/s × ~200 followers). Push wins ~400×, so the system materializes every user's timeline in advance — *except* where fan-out explodes.
+
+**Responsibilities**
+
+- Accept posts and follows; store posts durably in the **Post store**, edges in the **Follow graph store**.
+- Fan each post out asynchronously — **Feed API** → **Fan-out queue** → **Fan-out workers** → **Timeline cache** — hitting a ~5-second freshness target.
+- Serve `GET /feed` as a cheap read: precomputed IDs, hydrated to content, merged with live celebrity posts.
+
+The defining decision is the **hybrid**: push for the many (~200 followers), pull for the huge (100M+ followers, whose posts skip fan-out and merge at read time).
+
+**Where it breaks.** The timeline is derived data with no reconciliation — a worker crash mid-fan-out would silently lose deliveries, which is why the pipeline pairs at-least-once redelivery with idempotent inserts. And staleness lives in the queue: fan-out lag *is* the user-visible SLO.
+
+### ⚙️ Feed API
+`Service` · `Python · FastAPI`
+
+The **Feed API** is the system's only synchronous surface: post creation and timeline reads, both inside the &lt;500 ms budget.
+
+**Responsibilities**
+
+- `POST /posts` — write the post to the **Post store**, then enqueue `{postId, authorId}` on the **Fan-out queue** and return `201`. The response never waits for fan-out; the queue is where the request path ends and the async pipeline begins.
+- `GET /feed` — reads are **IDs-then-hydrate**: pull the precomputed ID list from the **Timeline cache**, merge in live posts from any celebrity accounts the reader follows, then hydrate IDs into content from the Post store. Pages by cursor (oldest-seen timestamp), not offset.
+
+Two classes carry the read path:
+
+```mermaid
+classDiagram
+    class TimelineReader {
+        +read(user, cursor) FeedPage
+    }
+    class CelebrityMerger {
+        +merge(precomputed, live) list
+    }
+    TimelineReader --> CelebrityMerger : merge streams
+    TimelineReader --> TimelineCache : LRANGE ids
+    TimelineReader --> PostStore : hydrate
+    CelebrityMerger --> PostStore : recent celebrity posts
+```
+
+**TimelineReader** owns the lookup, hydration, and cursor; **CelebrityMerger** is the read-time half of the hybrid — celebrity posts never rode the write path, so the reader merges two time-sorted streams on every request.
+
+**Where it grows.** The API is stateless and scales horizontally; its ceiling is the stores behind it. Hydration survives scale only because posts are write-once, read-enormously — the friendliest skew caching ever gets.
+
+### 🧩 TimelineReader
+`Code` · `Python`
+
+**TimelineReader** owns `GET /feed` — the read that must land in under 500 ms, 2M times a second, and it stays fast by doing almost no work: the fan-out pipeline already did it.
+
+**Responsibilities**
+
+- Pull the materialized id list from the **timeline cache** (`LRANGE` on the reader's key) — one lookup, not a 200-account query.
+- Hand the precomputed stream to **CelebrityMerger** to fold in live posts from any celebrity accounts the reader follows.
+- **Hydrate** the merged ids into content from the post store — the read-time join the design tolerates because posts are write-once, read-enormously, and hydration cost is independent of follower counts.
+- Page by **cursor**: *"the next N older than T,"* with the production tie-breaker `(timestamp, postId)` since timestamps collide.
+
+The cursor choice is load-bearing. Offsets break twice in a feed — new posts shift every position (page 2 re-serves page 1's tail), and `OFFSET 100000` materializes and discards 100k entries. A cursor names a *record*, not a position; and it composes perfectly with the hybrid read, as the low-water mark both merge inputs respect.
+
+**The invariant it protects:** a cursor page is stable under concurrent inserts — no re-served and no skipped entries at the page boundary, because the cursor addresses a record that inserts cannot shift.
+
+**Where it grows.** Past the ~200-entry cap the materialized feed ends; the reader falls back to the pull path, which may be slow in peace. Implemented in the forthcoming POC at `06-case-studies/examples/news-feed/app/timeline_reader.py`.
+
+### 🧩 CelebrityMerger
+`Code` · `Python`
+
+**CelebrityMerger** is the read-time half of the hybrid — the class that exists because one account with 100M+ followers turns push-based fan-out into ~20M timeline writes per second for a single post, and no write path survives that.
+
+**Responsibilities**
+
+- Identify the few celebrity accounts *this reader* follows — the accounts the fan-out workers deliberately skipped.
+- Live-query their recent posts from the **post store** (a heavily cached, write-once-read-enormously lookup).
+- Merge two time-sorted streams — the materialized timeline and the live celebrity posts — into one, respecting the caller's cursor as the low-water mark both inputs honor.
+
+The merge is cheap by construction: both inputs arrive time-sorted, so this is the textbook two-pointer merge over a page's worth of entries, and its cost scales with how many celebrities the *reader* follows (a handful), not with how many followers the *celebrity* has (the number that killed the write path). That asymmetry — push for the many, pull for the huge — is the whole hybrid, and both DDIA and the interview canon land on it independently.
+
+**The invariant it protects:** every celebrity post appears in every follower's feed **without ever riding the fan-out pipeline** — skipping at write time never means missing at read time.
+
+**Where it grows.** The celebrity threshold is a tunable dial: raise it and reads do more merging; lower it and the write pipeline carries more load. Implemented in the forthcoming POC at `06-case-studies/examples/news-feed/app/celebrity_merger.py`.
+
+### 🗄️ Post store
+`Relational database` · `PostgreSQL`
+
+The **Post store** is the system of record for posts: `id → author, content, timestamp`. Everything else that holds post data — every entry in every materialized timeline — is a derived copy; this table is the source they derive from.
+
+**Responsibilities**
+
+- Accept post inserts from the **Feed API** write path. Write volume is the easy part of this design: 5,800 posts/s on average is a modest load for a partitioned relational store.
+- Serve **hydration** — timelines store only post IDs, so every feed read comes back here to turn ~200 IDs into content. This is a read-time join by design: post bodies, like counts, and author profiles change too fast to denormalize into 200 follower timelines apiece.
+- Serve the **CelebrityMerger**'s live queries for recent posts by flagged high-follower accounts — celebrity posts live *only* here, never fanned out.
+
+The reasoning for IDs-then-hydrate: hydration cost is bounded (~a page worth of lookups, parallelizable, independent of anyone's follower count), whereas the join it replaced — across all followed accounts — was unbounded.
+
+**Where it breaks.** Hydration means every feed read in the system lands here, so the store lives or dies by its cache hit rate; a hot celebrity post is the classic hot-key. It is also the recovery root: a lost timeline is rebuildable from posts + follows, but a lost post is gone.
+
+### 🗄️ Follow graph store
+`Relational database` · `PostgreSQL`
+
+The **Follow graph store** holds the follower/followee edges — a many-to-many relationship that the system must query in *both* directions, which is the whole subtlety of this box.
+
+**Responsibilities**
+
+- Store one row per uni-directional follow edge, inserted when a user follows someone (an idempotent `PUT` — following twice is a no-op).
+- Answer **"who follows X?"** for the **Fan-out workers**: every post event triggers a follower-list read here, and that list *is* the fan-out — its length (~200 on average, 100M+ in the tail) decides how much work one post becomes.
+- Answer **"whom does X follow?"** for the read-path fallback and the celebrity merge — the reader's own follow list identifies which flagged accounts to live-query.
+
+Both directions need an index; the lesson models it as a table keyed one way with a reversed secondary index. The *distribution* stored here is the design input: the hybrid exists because this graph's follower counts have a monstrous tail, and the celebrity flag is effectively an attribute of an account in this graph.
+
+**Where it breaks.** The follower-list read sits on the critical path of every fan-out job — a slow read here stalls delivery lag directly. And new edges only affect *future* posts: follow someone today and your materialized timeline knows nothing about their back catalog until a backfill or read-time patch fixes it.
+
+### 🌊 Fan-out queue
+`Event stream` · `Redis Stream`
+
+The **Fan-out queue** buffers post events between the API and the workers — it is the **async boundary** of the design, the line where *"handle it before returning 201"* ends and *"handle it within the freshness SLO"* begins.
+
+**Responsibilities**
+
+- Accept a small `{postId, authorId}` event from the **Feed API** the moment a post is stored; the author's `201` never waits for delivery.
+- Hold events through spikes — posting peaks hit ~26× the average (150k posts/s vs 5,800/s), and the queue absorbs that burst as *lag* rather than as blocked writes or a melted timeline store.
+- Deliver events to the **Fan-out workers** with **at-least-once** semantics: an event whose processing crashes is redelivered, never dropped.
+
+Why a queue at all: the fan-out (~200 timeline writes per post, ~1M/s fleet-wide) is too much work for the request path, but it's *deferrable* work — the target is a post reaching followers within ~5 seconds, an SLO on this pipeline, not a request deadline.
+
+**Where it breaks.** At-least-once means duplicates by design — safe only because the downstream insert is idempotent. Queue *depth* is a misleading health metric: one celebrity-sized job can starve everything behind it while depth looks fine, so the number to watch is the age of the oldest undelivered post. The queue converts overload into staleness — which is precisely the trade the 1-minute staleness NFR authorizes.
+
+### 🛠️ Fan-out workers
+`Worker` · `Python worker`
+
+The **Fan-out workers** are the async half of the design: they turn one post event into ~200 timeline writes — ~1M+ writes/second fleet-wide — off the request path, against a freshness SLO (~5 seconds) instead of a request deadline.
+
+**Responsibilities**
+
+- Consume post events from the **fan-out queue** with at-least-once semantics.
+- Look up the author's followers in the **follow graph store**.
+- Insert the post id into each follower's materialized timeline in the **timeline cache** — idempotently.
+- **Skip celebrity authors** entirely: their posts are merged at read time by the feed API, because a 100M-follower fan-out (~20M writes/second to hit the SLO) has no sane write-path answer.
+
+Two classes carry the pipeline:
+
+```mermaid
+classDiagram
+    class FanoutConsumer {
+        +run()
+        +handle(event)
+    }
+    class TimelineFanout {
+        +fan_out(post)
+        +is_celebrity(author) bool
+    }
+    FanoutConsumer --> TimelineFanout : fan_out(post)
+```
+
+`FanoutConsumer` owns the queue discipline (consume, hand off, acknowledge); `TimelineFanout` owns the delivery decision (who gets it, who's skipped) and the idempotent insert. Together they compose the effectively-exactly-once pipeline: at-least-once redelivery plus an insert that converges duplicates to one entry. Each mirrors a file in the forthcoming POC at `06-case-studies/examples/news-feed/worker/`.
+
+**Where it breaks.** Work per message varies brutally — one event means 200 writes, another means a million — so a single celebrity-sized job skews worker load and starves everything behind it while queue depth looks fine. Split large jobs, and watch the age of the oldest undelivered post, not the depth.
+
+### 🧩 FanoutConsumer
+`Code` · `Python`
+
+**FanoutConsumer** is the queue discipline of the fan-out pipeline: the loop that turns *"there's an event on the stream"* into *"TimelineFanout has fully handled it,"* without ever losing a post.
+
+**Responsibilities**
+
+- `run()`: consume `{postId, authorId}` events from the **fan-out queue** (Redis Stream consumer group) in a long-lived loop.
+- `handle(event)`: pass each event to **TimelineFanout**, and acknowledge the event only *after* the fan-out completes.
+- On crash or timeout, let the queue redeliver the unacknowledged event to another consumer — at-least-once, never at-most-once.
+
+The ack-after-processing ordering is the entire class. Acknowledge first and a crash mid-fan-out silently loses deliveries — and a materialized timeline is never reconciled, so a lost delivery is a post that *permanently* never appears for some followers. Acknowledge after, and a crash means the event is processed again — duplicates instead of holes. The design chooses duplicates deliberately, because the downstream insert is idempotent: redelivery converges to the same timeline, which is how at-least-once plus idempotency composes into the effectively-exactly-once pipeline the fault-tolerance requirement demands.
+
+**The invariant it protects:** no post event is ever dropped — every event is either fully fanned out or redelivered; duplicates are permitted, holes are not.
+
+**Where it breaks.** A poison event that fails every redelivery blocks its consumer forever without a dead-letter escape, and a slow celebrity-sized job holds its event unacknowledged long enough to look dead. Implemented in the forthcoming POC at `06-case-studies/examples/news-feed/worker/fanout_consumer.py`.
+
+### 🧩 TimelineFanout
+`Code` · `Python`
+
+**TimelineFanout** does the actual multiplication: one post event in, ~200 timeline writes out — the mailbox delivery that makes every follower's feed read a single lookup.
+
+**Responsibilities**
+
+- `is_celebrity(author)`: the hybrid's dial — high-follower authors are **skipped** here entirely, because their posts are merged at read time by `CelebrityMerger`; a 100M-follower delivery has no sane write-path answer.
+- `fan_out(post)`: read the author's follower list from the **follow graph store**, then insert the post id into each follower's capped timeline in the **timeline cache**.
+- Make every insert **idempotent**: inserting the same post id into the same timeline twice converges to one entry.
+
+Idempotency is not an optimization here — it is what makes the pipeline's delivery semantics honest. The queue upstream redelivers on crash (at-least-once, because a lost delivery to a materialized timeline is never repaired), so every insert must tolerate being replayed: same post, same follower, same final timeline. At-least-once delivery plus idempotent writes is the composition that behaves as exactly-once, which is precisely the fault-tolerance the case study demands of a worker that dies 60,000 followers into a 100,000-follower job.
+
+**The invariant it protects:** the idempotent insert makes redelivery safe — a replayed event can never duplicate a post in anyone's feed, so retrying is always the right call.
+
+**Where it breaks.** The follower-list read is a point-in-time snapshot: follows that change mid-fan-out land or miss arbitrarily — accepted, since the feed is best-effort derived data. Implemented in the forthcoming POC at `06-case-studies/examples/news-feed/worker/timeline_fanout.py`.
+
+### ⚡ Timeline cache
+`Cache` · `Redis`
+
+The **Timeline cache** is what *"precomputed feed"* physically is: per-user, time-ordered, capped lists of **post ids** — a materialized view of the posts⋈follows join, kept current by the fan-out pipeline. It is the reason a feed read is one key lookup instead of a 200-account query.
+
+**Responsibilities**
+
+- Absorb ~1.16M small prepends/second from the **fan-out workers** — the write side of push-based fan-out.
+- Serve `userId → id list` to the **feed API** for every `GET /feed`; the API hydrates ids into content separately.
+- Cap each timeline at ~200 entries. Ids, not text: at ~10 bytes per id that's ~2 KB per user and single-digit terabytes across 2B users — trivially affordable, which is the point. Storing content would balloon storage and go stale instantly (like counts and avatars mutate constantly).
+
+The cap has an honest consequence: page far enough back and the materialized feed simply *ends*. The fallback is the design's own history — the pull path, querying follows + posts directly — and it can be slow in peace, because almost nobody pages that deep.
+
+**Where it breaks.** This store is **not a ledger**. It is best-effort derived data whose SLO is freshness, not completeness: a delivery missed without redelivery is permanently invisible (nothing downstream reconciles), and for hyper-followers the design deliberately drops writes and shows a sample. Correctness therefore lives in the pipeline feeding it — at-least-once delivery plus idempotent inserts — not in the store itself. Losing a node means rebuilding timelines from the pull path, not restoring a backup.
+
+</details>
 
 ## ⚖️ Trade-offs
 

@@ -186,29 +186,150 @@ Zoom out from one offer to the whole ride: `requested → matched → offered �
 
 **Two fine-print clauses, both from DDIA, both interview gold.** First, durable execution's replay only dedupes what the framework logged: any *external* service in the workflow — above all the payment gateway at `completed → paid` — must itself expose an [**idempotent**](/synapse/system-design-from-first-principles/patterns/idempotency-and-exactly-once) API, with the caller supplying unique IDs to make retried calls safe <abbr title="[pp. 188–189]">[i]</abbr>. That's the general truth about retries: a timed-out request may have succeeded, so retrying can execute the action twice unless idempotence is built into the protocol <abbr title="[p. 183]">[i]</abbr> — charge-the-rider is where that stops being abstract, and idempotency keys get their full treatment in the payments discussion later in the book. Second, replay re-runs your code deterministically, so nondeterminism — random numbers, reading the system clock — breaks it; frameworks ship deterministic substitutes you must remember to use, plus static analysis (Temporal's Workflow Check) to catch violations <abbr title="[p. 189]">[i]</abbr>.
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `uber.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the matching service. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_uber_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Uber — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-uber" root="System Context"
+direction: right
+
+classes: {
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+rider: "Rider\n[Person]" {
+  class: client
+  shape: person
+}
+
+driver: "Driver\n[Person]" {
+  class: client
+  shape: person
+}
+
+sys: "Uber\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+rider -> sys: "request ride · live status"
+driver -> sys: "location pings · offers"
+
+layers: {
+  container: {
+    direction: down
+
+    rider: "Rider\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    driver: "Driver\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    gw: "API gateway\n[Gateway]" {
+      class: edge
+    }
+
+    loc: "Location service\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    geo: "Geo index\n[Redis GEO]" {
+      class: data
+      shape: cylinder
+    }
+
+    match: "Matching service\n[Python · FastAPI]" {
+      class: svc
+      link: _.layers.code
+    }
+
+    locks: "Driver locks\n[Redis (SET NX PX)]" {
+      class: data
+      shape: cylinder
+    }
+
+    trip: "Trip service\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    trip_db: "Trip DB\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    notify: "Notification & live channel\n[APN/FCM push + WebSocket]" {
+      class: async
+    }
+
+    gw -> loc: "driver pings"
+    loc -> geo: "TTL'd position writes"
+    gw -> match: "ride requests"
+    match -> geo: "nearby-driver queries"
+    match -> locks: "acquire / release offer lock"
+    match -> notify: "push offer to driver"
+    match -> trip: "accepted → create trip"
+    trip -> trip_db: "state transitions"
+    trip -> notify: "status to rider"
+  }
+
+  code: {
+    direction: down
+
+    match: "Matching service\n[Python · FastAPI]" {
+      class: svc
+
+      nearby_driver_query: "NearbyDriverQuery" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/07-uber/domain/nearby_driver_query.py"
+      }
+      driver_lock: "DriverLock" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/07-uber/domain/driver_lock.py"
+      }
+      offer_flow: "OfferFlow" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/07-uber/domain/offer_flow.py"
+      }
+    }
+
+    geo: "Geo index\n[Redis GEO]" {
+      class: data
+      shape: cylinder
+    }
+
+    locks: "Driver locks\n[Redis (SET NX PX)]" {
+      class: data
+      shape: cylinder
+    }
+
+    trip: "Trip service\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    notify: "Notification & live channel\n[APN/FCM push + WebSocket]" {
+      class: async
+    }
+
+    match.offer_flow -> match.nearby_driver_query: "candidates"
+    match.offer_flow -> match.driver_lock: "lock before offering"
+    match -> notify: "push offer to driver"
+    trip -> notify: "status to rider"
+    match.driver_lock -> locks: "SET NX PX / DEL"
+    match.nearby_driver_query -> geo: "GEOSEARCH"
+    match.offer_flow -> trip: "create trip (idempotent)"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the matching service (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_uber_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Uber — C4 code level (inside the matching service)"
-></iframe>
 
 A **runnable implementation** of the matching core lives at `_proof-of-concepts/07-case-studies/07-uber/` in the repo root — the three classes above (`NearbyDriverQuery`, `DriverLock`, `OfferFlow`), over Redis GEO + Redis locks + Postgres.
 
@@ -222,6 +343,230 @@ cd _proof-of-concepts/07-case-studies/07-uber
 `./run test` makes the contention concrete: retrying the same ride request returns the **same trip** (exactly-once, backed by `UNIQUE(request_id)`); and 8 riders scrambling for 5 drivers, fired concurrently, produce exactly **5 matches to 5 distinct drivers** — no driver offered to two riders — while the other 3 get a clean *"no driver available"*. The per-driver `SET NX` lock is what serialises the offer.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>14 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Rider
+`Actor` · `Human · rider app`
+
+The **Rider** asks one question — *"get me from here to there"* — and then does something the system must design around: they *wait, watching*. From the tap on *"request"* to a driver assignment, the rider stares at a live status screen, which turns matching into a sub-minute, user-visible SLA rather than a background job. A fare quote precedes everything: the rider says yes to a **priced** trip, not to an open-ended meter.
+
+**Responsibilities**
+
+- Request a fare quote (pickup + destination) and accept it — creating the ride against that `fareId`, never against a client-supplied price.
+- Send *nothing* the server can compute or already knows: identity rides in the session, timestamps come from server clocks, and above all the fare is looked up server-side — any price the client supplies is a price the client can edit.
+- Watch ride status live over the realtime channel: requested → matched → en route → in ride → completed.
+
+**Where it breaks.** Impatience and retries. A rider who taps *"request"* twice, or whose app retries a timed-out POST, must not spawn two rides — which is why ride creation is idempotent per request downstream. And riders cluster: a stadium emptying puts a hundred thousand of them in one geohash cell at once, the hot-zone burst the queue in front of matching exists to absorb.
+
+### 👤 Driver
+`Actor` · `Human · driver app, GPS on`
+
+The **Driver** is two very different clients in one phone. As a *sensor*, the app streams a location ping every ~5 seconds all shift — across a fleet of roughly 10 million drivers, about 2 million writes per second of overwrite-only data that is worthless within seconds. As a *scarce resource*, the driver is the inventory being allocated: when a ride is offered, this driver must see **exactly one offer at a time**, with 10 seconds to accept or decline before the system moves on.
+
+**Responsibilities**
+
+- Stream location pings on a fixed interval while available — the firehose the Location service exists to absorb.
+- Receive at most one offer at a time (enforced by the per-driver TTL lock) and answer it within the offer window; silence counts as decline.
+- Accept or decline via the ride endpoint; an accept may be retried safely — assignment is idempotent downstream.
+
+**Where it breaks.** This actor's phone is the least reliable component in the system: apps crash, batteries die, tunnels swallow signal. The design refuses to build a liveness protocol around that — a driver who stops pinging simply *ages out* of the geo index within one TTL, and an offer to a driver who went dark expires on its own lock TTL. Absence of evidence becomes evidence of absence, enforced by the data's own lifecycle.
+
+### 🏢 Uber
+`System` · `Gateway + FastAPI services + Redis + PostgreSQL`
+
+**Geospatial matching under contention**: find nearby drivers fast, offer to exactly one, survive the hot zone. The architecture falls out of one observation about the entities — four of them (rider, driver, fare, ride) are *facts with a lifetime* that belong in rows; the fifth, driver location, is a **firehose**: written ~2M times a second, overwritten on every write, worthless when stale. Splitting those two lifetimes into different stores is most of the design.
+
+**Responsibilities**
+
+- **Absorb the firehose** on a dedicated write path: pings flow through the Location service into a TTL'd in-memory geo index — nothing durable ever sees them.
+- **Allocate under contention**: the Matching service radius-queries candidates, takes a per-driver TTL lock so no driver gets simultaneous offers, and walks the ranked list one offer at a time.
+- **Own the durable spine**: the Trip service runs the ride's state machine, with PostgreSQL as the system of record and the final arbiter of who got the ride.
+- **Deliver in real time**: offers to drivers, live status to riders.
+
+The layering to say out loud: **Redis is the experience; Postgres is the invariant.** TTLs make freshness and lock-release automatic; the conditional trip write makes *"one driver per ride"* true even if every lease lies.
+
+**Where it breaks.** Hot zones — a stadium emptying concentrates riders and a knot of drivers into one geohash cell, textbook skew that uniform sharding cannot fix; the answers are queue-buffered matching, subdividing hot cells, and geographic partitioning so one city's meltdown stays local.
+
+### 🚪 API gateway
+`API gateway` · `Gateway`
+
+The **API gateway** fronts both apps and terminates the realtime channels — one entry point, two radically different traffic shapes behind it. Rider traffic is low-rate and transactional (a fare quote, a ride request, an occasional cancel); driver traffic is the ping firehose, high-frequency and fire-and-forget. The gateway's most important routing decision is keeping those apart: pings go straight to the Location service's dedicated write path, ride requests go to the Matching service, and neither queue ever blocks the other.
+
+**Responsibilities**
+
+- Authenticate every request and attach identity server-side — the client never supplies a `userId`, a timestamp, or (above all) a fare amount; anything the client could edit, the gateway's session context or a server-side lookup provides instead.
+- Rate-limit per client, which matters most on the ping path: a misbehaving driver app re-sending at 10× the interval is throttled at the edge, not absorbed downstream.
+- Route by traffic class: high-frequency location writes to the Location service, ride lifecycle calls to Matching and Trip, and hold the persistent connections the Realtime channel pushes through.
+
+**Where it grows.** Horizontally and statelessly — the gateway holds no ride state, so instances multiply behind a load balancer as the fleet grows. The pressure point is connection count, not CPU: every online driver and every waiting rider holds a realtime connection, so the gateway tier's sizing follows the fleet, not the request rate.
+
+### ⚙️ Location service
+`Service` · `Python · FastAPI`
+
+The **Location service** exists for one reason: the ping firehose must not touch anything else. Roughly 10 million drivers pinging every 5 seconds is about **2 million writes per second** — two orders of magnitude beyond what a durable relational store sustains, and the naive design dies here first. Worse, the writes are unlike everything else in the system: each ping *overwrites* the last, nobody ever queries where a driver was 40 seconds ago, and the value expires in seconds. Paying durable-storage prices — WAL, replication, B-tree maintenance — for that data is the wrong store for the data's lifetime. So this container is the firehose's **only** consumer: a thin, stateless write path that nothing else shares.
+
+**Responsibilities**
+
+- Accept every driver ping from the gateway and turn it into a `GEOADD` plus a freshness TTL on the geo index — write-through, no batching, so there is no staleness window on the write path.
+- Do nothing else. No reads, no ride logic, no durable writes; its isolation *is* the design decision.
+
+**Where it grows.** Horizontally without ceremony — it holds no state, so instances scale with ping volume; the real lever is upstream, where adaptive ping intervals (stationary drivers ping rarely, fast movers often) cut the write rate at the source.
+
+**Where it breaks.** If it backs up, the geo index goes stale and matching quietly degrades — offers go to drivers who have moved on. The TTL bounds the damage: positions that stop refreshing evaporate rather than lie.
+
+### ⚡ Geo index
+`Cache` · `Redis GEO`
+
+The **Geo index** is the store shaped like the question: "who's nearby, *right now*?" `GEOADD` encodes each driver's lat/lng as a **geohash** — coordinates interleaved into one sortable value, so nearby points (edge cases aside) share prefixes — in a sorted set; `GEOSEARCH` answers radius queries directly against that structure. In-memory speed absorbs the full 2M-writes/second firehose with no batching, where a B-tree over `lat`/`lng` degenerates to scanning a latitude band, and a quadtree — right for skewed, *static* spatial data — churns endlessly under a swarm in motion. Geohash's fixed grid is indifferent to update rate, which is exactly why it wins here.
+
+**Responsibilities**
+
+- Hold each driver's latest position, overwritten per ping — never a history.
+- Enforce **freshness by TTL**: an entry not refreshed within the window simply expires, so a crashed app or a tunnel removes its driver from matching with no health checker and no liveness protocol. Stale drivers evaporate.
+- Answer the Matching service's radius queries as the candidate source.
+
+**Where it breaks — and why that's fine.** It's volatile, and the design leans into it: persistence and failover exist, but a cold replacement node rebuilds the entire working set in one ~5-second ping interval, because the source of truth was never Redis — it's ten million phones. The honest costs are cell-boundary queries needing care, and hot cells (a stadium's geohash) concentrating load that uniform sharding can't spread — subdivide the hot cell instead.
+
+### ⚙️ Matching service
+`Service` · `Python · FastAPI`
+
+The **Matching service** is the contention core — where a scarce, moving inventory (drivers) meets concurrent claimants (ride requests). If you did Ticketmaster, you've seen the shape: an inventory unit claimable by exactly one party for a bounded window. The seat became a driver, ten minutes became ten seconds, the inventory now drives around — the ladder is the same.
+
+**Responsibilities**
+
+- Radius-query the geo index for nearby available drivers and rank them (ETA, rating).
+- Take the per-driver **TTL lock** before every offer — the guarantee that no driver ever sees two simultaneous offers, and that a crashed matcher's lock releases itself by expiry.
+- Walk the offer chain *one driver at a time*: offer, wait out the 10-second window, on decline or silence move to the next candidate.
+- On accept, hand off to the Trip service — whose conditional, constraint-backed write is the **final arbiter**; the Redis lock is the experience, the trip row is the invariant.
+
+Three classes carry that loop:
+
+```mermaid
+classDiagram
+    class NearbyDriverQuery {
+        +find(location, radius) list~Candidate~
+    }
+    class DriverLock {
+        +acquire(driver_id, request_id, ttl) bool
+        +release(driver_id, request_id)
+    }
+    class OfferFlow {
+        +run(request) Trip
+    }
+    OfferFlow --> NearbyDriverQuery : candidates
+    OfferFlow --> DriverLock : lock before offering
+    note for OfferFlow "offer → accept | expire → next candidate ·\naccept idempotent · trip created exactly once"
+    note for DriverLock "SET NX PX per driver · TTL is the release ·\nadvisory — the trip row is final"
+```
+
+Each class maps to a file in the forthcoming POC at `06-case-studies/examples/uber/app/` — click the code-level boxes for their docs.
+
+**Where it breaks.** The lease that lies: a GC-paused matcher can resume as a zombie, still acting on a lock that expired mid-pause. The design survives because assignment never trusts the lock — the zombie's late write matches zero rows downstream. And hot zones: one stadium's worth of requests converging on one cell is why matching sits behind a buffer, degrading to latency instead of dropped requests.
+
+### 🧩 NearbyDriverQuery
+`Code` · `Python`
+
+**NearbyDriverQuery** answers the question that kills the naive design: "which available drivers are within *r* of this pickup, *right now*?" — as a `GEOSEARCH` against the geo index plus ranking (ETA, rating) over the hits. It is deliberately read-only and deliberately dumb about freshness.
+
+**Responsibilities**
+
+- `find(location, radius)`: radius query against the geo index, returning ranked candidates for the offer flow to walk.
+- Rank, don't reserve: this class never touches locks or trips — it produces candidates; `DriverLock` and `OfferFlow` decide what happens to them.
+
+**The invariant it relies on:** freshness comes from the **index TTLs, not from the query**. `find` never checks whether a driver is alive, recently seen, or still where the entry says — it doesn't have to, because any entry not refreshed within one ping interval has already evaporated. The class inherits liveness from the data's own lifecycle, which is why it can stay a single read with no health-check round-trips on the sub-minute matching path.
+
+**Where it breaks.** Its answers are bounded-stale by construction — a candidate at ~50 km/h moves ~70 m between 5-second pings, noise against a kilometer-scale radius but real at pickup precision. And geohash cell boundaries can clip a radius query, so near-boundary searches need care. Both are accepted costs, not bugs: candidates are *offers to attempt*, and the lock + conditional trip write downstream absorb any staleness. Lands in the forthcoming POC at `06-case-studies/examples/uber/app/nearby_driver_query.py`.
+
+### 🧩 DriverLock
+`Code` · `Python`
+
+**DriverLock** is the offer-window lease: one atomic `SET NX PX` per driver — Ticketmaster's `SeatHoldService` wearing a different hat, with the hold window shrunk from ten minutes to ten seconds and the inventory now driving around.
+
+**Responsibilities**
+
+- `acquire(driver_id, request_id, ttl)`: set `lock:driverId → rideId` only if absent, with expiry — two matchers racing for the same driver get exactly one winner, decided by Redis's atomic set, no check-then-set window.
+- `release(driver_id, request_id)`: drop the lock on accept or explicit decline; otherwise do nothing — expiry handles it.
+
+**The invariants it protects:** a driver holds at most **one outstanding offer at a time**, and no lock outlives its TTL — so a matcher that crashes mid-offer releases its driver by *expiry, not cleanup code*. Crashed flows self-heal; there is no sweeper, no orphan-lock cron, no sweep-lag during which drivers sit invisible.
+
+**And the one it deliberately doesn't:** this lock is **advisory, not final**. It is a lease, and leases lie — a GC-paused matcher can resume after its TTL as a zombie leaseholder, so it is not safe to assume only one holder at any instant. The class carries no fencing tokens and no consensus, because the design puts the real guarantee elsewhere: the conditional trip write in Postgres is the final arbiter, and a zombie's late assignment matches zero rows. Lose this class entirely and drivers get messy duplicate offers — never double-booked.
+
+**Where it breaks.** Exactly at that seam: anyone who treats `acquire` returning `True` as proof of exclusive assignment has rebuilt the bug the layering exists to prevent. Lands in the forthcoming POC at `06-case-studies/examples/uber/app/driver_lock.py`.
+
+### 🧩 OfferFlow
+`Code` · `Python`
+
+**OfferFlow** is the allocation loop written as readable code: get candidates, then walk them one at a time — lock, offer, await accept within the window; on decline or expiry, advance to the next. It composes the other two classes and owns the sequencing they deliberately don't.
+
+**Responsibilities**
+
+- `run(request) → Trip`: pull ranked candidates from `NearbyDriverQuery`, and for each: `DriverLock.acquire` first (an offer without a lock could double-offer a driver), push the offer, wait out the window, and either hand off to trip creation or move on. Lock-acquisition failure just means someone else holds that driver — skip, don't wait.
+- Keep **accept idempotent**: a retried accept (flaky driver network, duplicate tap) converges on the same result instead of erroring or duplicating.
+- Create the trip **exactly once per request** — the write goes through the Trip service against the Trip DB's per-request unique constraint, so even a zombie flow replaying an assignment matches zero rows.
+
+**The invariant it protects:** every ride request produces at most one trip, and every accepted offer produces exactly one — no matter how many retries, duplicate accepts, or crashed-and-resumed flows occur along the way. The loop's *liveness* (who advances to driver B if this executor dies mid-window?) is the workflow problem the lesson resolves with durable timeouts or durable execution; its *safety* never depends on the executor surviving, because it rests on the DB constraint.
+
+**Where it breaks.** On deadline math: the sub-minute match SLA affords only ~5 sequential silent-driver hops at 10 seconds each — ranking quality, not loop mechanics, decides whether the walk finishes in time. Lands in the forthcoming POC at `06-case-studies/examples/uber/app/offer_flow.py`.
+
+### ⚡ Driver locks
+`Cache` · `Redis (SET NX PX)`
+
+One key per driver, `SET NX PX`: the **offer-window lock** that guarantees a driver receives exactly one offer at a time. It's Ticketmaster's seat hold wearing a different hat — same atomic acquire, same TTL release — and it beat two rivals to get here. A lock in matcher memory fails on arrival: instances don't share memory, so two matchers can both *"lock"* driver A, and a crash strands the driver. A status column in Postgres fixes coordination but breaks *release* — the 10-second expiry lives in an in-memory timer, so a dead process locks the driver forever, patchable only with sweep-lag crons. The TTL lease moves release into the store itself.
+
+**Responsibilities**
+
+- Atomic acquire: set `lock:driverId → rideId` only if absent, TTL 10 s — two matchers racing for the same driver get exactly one winner.
+- **TTL is the release**: accept in time and the matcher deletes the lock; silence, decline, or a crashed matcher, and expiry frees the driver unconditionally — no cleanup code, no sweeper.
+- Stay **advisory**: the trip-creation transaction remains the final arbiter of who got the ride.
+
+**Where it breaks.** A lease is not a guarantee: a paused matcher can outlive its TTL and resume as a zombie leaseholder, and a failover can forget grants. Both cost UX only — a stray duplicate offer for a few seconds — because the conditional trip write downstream fences the consequences. Lose this store entirely and you get messy offers, never a double-booked driver.
+
+### ⚙️ Trip service
+`Service` · `Python · FastAPI`
+
+The **Trip service** owns the ride's durable spine: `requested → matched → accepted → en route → in ride → completed`, with failure arrows at every step. Every arrow is a network hop, most involve a human, and the whole process spans an hour — which makes the ride a **workflow**, not a request. The pointed failure case: a driver drops the phone on the passenger seat; who moves on to the next driver if the matcher holding the 10-second timer has meanwhile crashed? Timers, loop position, and retries must survive any single process dying — via durable timeouts (delayed messages) or a durable-execution engine that logs every step and replays past completed ones on recovery.
+
+**Responsibilities**
+
+- Execute state transitions as **conditional writes**: assign a driver only where the ride is still unassigned — this, not the Redis lock, is what makes *"exactly one driver per ride"* true. A zombie matcher's late write matches zero rows and bounces.
+- Create each trip **exactly once per request**, backed by the Trip DB's unique constraint, so retried accepts are safe.
+- Push status to the rider over the realtime channel at every transition.
+
+**Where it breaks.** At the workflow's external edges: replay and retries only dedupe what the system itself logs, so any outside call — above all payment at `completed → paid` — must expose an idempotent API with caller-supplied keys, or a retry becomes a double charge. Inside the boundary, the DB constraint holds the line.
+
+### 🗄️ Trip DB
+`Relational database` · `PostgreSQL`
+
+The **Trip DB** is the system of record for the facts with a lifetime — riders, drivers, fares, trips and their state — everything the entity analysis kept *out* of the firehose path. It is deliberately boring: while location data gets an exotic in-memory store because of its write rate and shelf life, the durable facts arrive at human tempo (a trip transitions a handful of times over an hour) and demand exactly what a relational database sells — transactions, constraints, conditional writes.
+
+**Responsibilities**
+
+- Hold the trip row as the ride's single durable spine; every state transition in the design is ultimately a transition on this row.
+- Enforce **one trip per request** via a unique constraint — the mechanism behind OfferFlow's exactly-once trip creation; a retried accept hits the constraint instead of creating a duplicate.
+- Back the **conditional write** that is the design's true invariant: assign a driver only where the trip is still unassigned, so a zombie matcher acting on an expired lease matches zero rows.
+
+The layering, said once more: everything upstream — geo index, TTL locks, offer pushes — is *experience*; this container is the *invariant*. Lose Redis and you get a few seconds of messy offers; lose the constraint here and you double-book drivers.
+
+**Where it breaks.** Not on write volume — successful matches are a trickle next to the ping firehose — but on contention in hot zones, where thousands of concurrent transitions converge; the queue ahead of matching meters arrivals so its short transactions stay short.
+
+### 🔔 Realtime channel
+`Notification service` · `WebSocket / push`
+
+The **Realtime channel** solves the last mile in both directions: the *offer* must reach a specific driver's phone within a 10-second window, and the *status* must reach a rider who is staring at the screen. Neither party can poll for this — the offer window is too short and the audience too large — so the server must be able to reach out first: push notifications (APN/FCM) for drivers who can't hold open request connections all shift, persistent connections for riders watching a live screen. It's the same last-mile delivery problem WhatsApp solved with persistent connections, met here with the delivery mechanism each client can sustain.
+
+**Responsibilities**
+
+- Deliver ride offers to the one locked driver, fast enough that delivery latency doesn't eat the 10-second offer window.
+- Stream status transitions to the waiting rider — requested, matched, driver en route — as the Trip service emits them.
+- Carry no decisions: this container is transport. Locks decide who gets the offer; the trip row decides who got the ride.
+
+**Where it breaks.** Delivery is best-effort by nature — a push can arrive late or never, and the design must not depend on it. It doesn't: an undelivered offer simply expires with the driver lock's TTL and the flow walks on to the next candidate; a missed status update is repaired by the next one. Every failure here degrades to waiting, never to inconsistency.
+
+</details>
 
 ## ⚖️ Trade-offs
 

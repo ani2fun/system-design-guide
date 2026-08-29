@@ -179,29 +179,151 @@ Steps 10–11 are the part candidates miss. Worker A was never *dead* — it was
 
 **The misfire policy.** When an execution *couldn't* run on time — scheduler outage, DLQ round-trip, hour-long backlog — you owe a decision, not a default: **run late** or **skip**. The term of art is a *misfire* [web: Quartz scheduler documentation — misfire instructions]. It is a product decision, not an engineering one: a billing run must fire late (money is owed regardless of your outage), while a *"warm the cache every minute"* job should skip — forty stale warm-ups back-to-back are pure waste that delays the one that matters. Per-job policy, declared at creation, default run-late-with-a-deadline. Asking which policy a job needs is one of the best clarifying questions you can put to an interviewer.
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `job-scheduler.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level across the elected scheduler and the idempotent worker. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_jobscheduler_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Job scheduler — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-job-scheduler" root="System Context"
+direction: right
+
+classes: {
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+owner: "Job owner\n[Person]" {
+  class: client
+  shape: person
+}
+
+sys: "Distributed Job Scheduler\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+owner -> sys: "register jobs · check status"
+
+layers: {
+  container: {
+    direction: down
+
+    owner: "Job owner\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    gw: "API gateway\n[Gateway]" {
+      class: edge
+    }
+
+    job_svc: "Job service\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    db: "Jobs & executions DB\n[DynamoDB / Cassandra]" {
+      class: data
+      shape: cylinder
+    }
+
+    coord: "Coordination service\n[ZooKeeper / etcd]" {
+      class: svc
+    }
+
+    scheduler: "Scheduler tick\n[Python worker]" {
+      class: svc
+      link: _.layers.code
+    }
+
+    queue: "Delay queue\n[SQS-style queue]" {
+      class: async
+      shape: queue
+    }
+
+    workers: "Worker fleet\n[Python workers (containers)]" {
+      class: svc
+      link: _.layers.code
+    }
+
+    dlq: "Dead-letter queue\n[DLQ]" {
+      class: async
+      shape: queue
+    }
+
+    gw -> job_svc: "register / query jobs"
+    job_svc -> db: "write Job + first Execution"
+    job_svc -> queue: "fast path: due < window"
+    scheduler -> coord: "renew lease (epoch n)"
+    scheduler -> db: "range-read due bucket"
+    scheduler -> queue: "enqueue execution_id (+ delay, epoch)"
+    queue -> workers: "deliver at due (visibility timeout)"
+    workers -> db: "conditional claim → RUNNING → COMPLETED"
+    queue -> dlq: "after max receives"
+  }
+
+  code: {
+    direction: down
+
+    scheduler: "Scheduler tick\n[Python worker]" {
+      class: svc
+
+      leader_lease: "LeaderLease" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/scheduler/leader_lease.py"
+      }
+      window_poller: "WindowPoller" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/scheduler/window_poller.py"
+      }
+      dispatcher: "Dispatcher" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/scheduler/dispatcher.py"
+      }
+    }
+
+    workers: "Worker fleet\n[Python workers (containers)]" {
+      class: svc
+
+      execution_claimer: "ExecutionClaimer" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/worker/execution_claimer.py"
+      }
+      heartbeat: "Heartbeat" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/13-job-scheduler/worker/heartbeat.py"
+      }
+    }
+
+    coord: "Coordination service\n[ZooKeeper / etcd]" {
+      class: svc
+    }
+
+    db: "Jobs & executions DB\n[DynamoDB / Cassandra]" {
+      class: data
+      shape: cylinder
+    }
+
+    queue: "Delay queue\n[SQS-style queue]" {
+      class: async
+      shape: queue
+    }
+
+    scheduler.leader_lease -> scheduler.window_poller: "tick only while leader"
+    scheduler.window_poller -> scheduler.dispatcher: "due executions"
+    workers.execution_claimer -> workers.heartbeat: "claimed → keep alive"
+    queue -> workers: "deliver at due (visibility timeout)"
+    scheduler.leader_lease -> coord: "renew / read epoch"
+    scheduler.window_poller -> db: "range-read PENDING"
+    scheduler.dispatcher -> queue: "enqueue with delay"
+    workers.execution_claimer -> db: "conditional claim"
+    workers.heartbeat -> queue: "extend visibility"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** across the elected scheduler and the idempotent worker (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_jobscheduler_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Job scheduler — C4 code level (scheduler + worker)"
-></iframe>
 
 A **runnable implementation** lives at `_proof-of-concepts/07-case-studies/13-job-scheduler/` in the repo root — both decisive containers: the scheduler (`LeaderLease`, `WindowPoller`, `Dispatcher`) and the worker (`ExecutionClaimer`, `Heartbeat`), over Redis (lease + epoch) and Postgres (executions).
 
@@ -215,6 +337,265 @@ cd _proof-of-concepts/07-case-studies/13-job-scheduler
 `./run test` drives all four guarantees: one node holds the leader lease while a second is rejected; when the lease lapses the new leader mints a **higher epoch**, and a dispatch carrying the stale epoch is rejected (409) — the **double-fire guard**; 10 workers racing to claim one execution yield **exactly one winner** (a conditional `PENDING → RUNNING`), turning at-least-once delivery into effectively-once; and a worker that stops heartbeating loses its visibility lease, so `reclaim` returns the job to PENDING for a healthy worker.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>15 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Job owner
+`Actor` · `Human · API client`
+
+The **Job owner** is anyone with work that must happen later — a one-off *"send this report at 10:00"* or a recurring *"bill every customer daily."* Their contract with the system is deceptively short: run it **within seconds of due, never miss it, never run it twice**. Every container downstream exists to keep one clause of that sentence true while machines crash underneath it.
+
+**Responsibilities**
+
+- Register jobs via `POST /jobs` — a task id, parameters, and a schedule (one-shot timestamp or cron expression), expressed in **UTC**: the server's NTP-disciplined clocks decide when 10:00 is, never the owner's device clock, which cannot be trusted.
+- Check outcomes via the status API — served by the `user_id` GSI on Executions, so *"show me my jobs"* never scans the time-bucketed base table.
+- Declare (ideally) a **misfire policy** per job — run late or skip when the system couldn't fire on time. Billing must run late; a cache warm should skip. It's a product decision only the owner can make.
+
+**Where it breaks.** The owner is also the load pattern: humans write `0 * * * *`, so demand spikes violently at the top of every minute and hour — the thundering herd lives in the *schedules*, not the infrastructure. And a multi-tenant scheduler is one `while(true) { schedule(now) }` away from a self-inflicted DoS, which is why admission quotas sit at the gateway, not deeper in.
+
+### 🏢 Distributed Job Scheduler
+`System` · `Time-bucketed store + coordination lease + delay queue + worker fleet`
+
+The **Distributed Job Scheduler** is cron at cluster scale: 10,000 executions/second, each fired within 2 seconds of due, never missed, never double-fired, on machines that pause, crash, and lie about the time. A single cron box fails this brief in exactly two ways — the box dies and time doesn't stop (silent misses), or you add a second box and everything runs twice — and the architecture is the systematic answer to both.
+
+**Responsibilities**
+
+- Store the **definition/instance split**: Jobs by `job_id`, Executions materialized into hour buckets — so *"what's due soon?"* is a range read over *time*, never a cron-expression scan over *all jobs*.
+- Keep the tick **logically singular and provably so**: a linearizable lease elects one scheduler, and a monotonic fencing epoch makes the inevitable zombie leader harmless rather than merely unlikely.
+- Convert *"rows due soon"* into *"messages that appear exactly on time"* through a **delay queue** — the database gives durability and cheap time-range reads; the queue gives second-level precision and worker fault tolerance. Neither can do both.
+- Execute **effectively once**: at-least-once delivery everywhere, plus an idempotent, `execution_id`-keyed conditional claim at the worker — dedup at the effect, because everything upstream can and will duplicate.
+
+**Where it breaks.** Each guarantee has a named boundary: the lease alone can't stop a GC-paused zombie (fencing does), the fence protects the *record* not the *world* (idempotent task design does), and the characteristic failure mode is silence — nothing errors when nothing runs, so schedule lag and the misfire counter are the graphs that matter.
+
+### 🚪 API gateway
+`API gateway` · `Gateway`
+
+The **API gateway** fronts a deliberately small surface — three endpoints — and routes them to the Job service. In a design whose hard problems live in the tick and the workers, the gateway's job is to keep the *entry* boring: terminate clients, route, and enforce admission policy so nothing pathological reaches the scheduling core.
+
+**Responsibilities**
+
+- Route `POST /jobs` (register a definition), `GET /jobs?status=&cursor=` (the caller's executions, newest first), and `GET /jobs/{job_id}` (definition plus recent executions) to the Job service.
+- Enforce **tenant quotas at admission** — cap jobs-created and executions-in-flight per tenant. A multi-tenant scheduler is one runaway loop away from a self-inflicted DoS, and the cheapest place to stop that is before the write path, with the same machinery as a standalone rate limiter.
+- Keep schedule input honest: schedules arrive in UTC, and nothing downstream ever consults a client clock.
+
+**Where it grows.** The gateway is stateless and scales horizontally ahead of the Job service; nothing here is a coordination point. The subtlety worth naming in an interview is what the gateway does *not* do: it cannot smooth the top-of-the-minute herd, because that spike is encoded in the cron expressions themselves — humans write `0 * * * *`. Splaying due times belongs where executions are materialized and dispatched, not at the front door; the gateway only ensures the herd that arrives is a *legitimate* one.
+
+### ⚙️ Job service
+`Service` · `Python · FastAPI`
+
+The **Job service** owns the write path and performs the design's founding move: it never stores *"a cron expression to be evaluated later"* as the unit of work. It validates the schedule, writes the **Job** (the definition — what the user wants, forever), and *materializes* the first **Execution** (the instance — what should happen at 10:00:00 on a given day, and whether it did) into its hour bucket. That flip — from *"which of my definitions is due?"* (a scan over all jobs) to *"what did I already decide should happen soon?"* (a range read over time) — is what makes the scheduler tick's work bounded.
+
+**Responsibilities**
+
+- Validate schedules (one-shot timestamp or cron, UTC only) and write Job + first Execution.
+- When a recurring execution completes, compute the next occurrence from the cron expression and insert a **fresh Execution row** — the Job row never changes; every retry, status, and dedup key hangs off the per-occurrence row.
+- **Fast-path imminent jobs**: anything due sooner than the next poll window skips the scheduler tick and goes straight onto the delay queue — otherwise a job created at 09:59 for 10:00 could miss its own deadline waiting for a 5-minute poll.
+- Serve status reads via the `user_id` GSI, never the time-bucketed base table.
+
+**Where it breaks.** The fast path means *two* producers write to the queue (Job service and scheduler tick), so enqueue can never be assumed unique — one more reason the worker's `execution_id`-keyed claim, not the enqueue path, is where *"once"* is enforced.
+
+### 🧱 Jobs & executions DB
+`Wide-column store` · `DynamoDB / Cassandra`
+
+The **Jobs & executions DB** holds the two-table split that *is* this design. A single Jobs table with a `cron_expression` column breaks immediately — finding what's due means evaluating every expression in the database, every tick. So: **Jobs** partitioned by `job_id` (the definitions), and **Executions** partitioned by **hour bucket** — planned time rounded down — so *"what's due in the next five minutes?"* is a range read of one or two partitions, not a table scan. A global secondary index on `user_id` serves the status dashboard without touching the time-bucketed base table.
+
+**Responsibilities**
+
+- Store one Execution row per planned occurrence: `execution_id`, `job_id`, `planned_time`, status (PENDING → RUNNING → COMPLETED / RETRYING / FAILED), attempt count.
+- Serve the scheduler's bounded range read: PENDING rows in the current bucket, due within the window.
+- Act as the **arbiter of "once"**: the worker's claim is a conditional write PENDING → RUNNING keyed by `execution_id`, and writes carrying a stale fencing epoch are rejected — this is where both duplicate deliveries and zombie schedulers go to die.
+
+Any wide-column or KV store with conditional writes fits — DynamoDB or Cassandra for painless partition scaling; Postgres works with more sharding care. Access patterns matter, not the logo.
+
+**Where it breaks.** Hot buckets: 10k/s × 3,600 s is ~36M rows per hour partition. Rule of thumb: suffix the bucket key with a small hash shard (`bucket#00…#15`) and range-read the suffixes in parallel, or one partition absorbs the whole hour.
+
+### 🗳️ Coordination service
+`Coordination service` · `ZooKeeper / etcd`
+
+The **Coordination service** answers exactly one question — *who is the scheduler right now?* — and answers it **linearizably**: all nodes agree on the leaseholder however the network mangles timing, which is what consensus-backed services like ZooKeeper and etcd exist to provide. DDIA lists *"choosing a leader among the instances of a job scheduler"* as a canonical use case for exactly this component.
+
+**Responsibilities**
+
+- Grant the scheduler **lease** as an ephemeral node tied to a heartbeat session: the winner ticks and renews; if its heartbeats stop past the session timeout, the lease releases automatically and a standby takes over. Failure detection is built in — no extra monitor.
+- Issue a **monotonic epoch** with every grant (ZooKeeper's `zxid`, etcd's revision — consensus algorithms call it a term). This is the fencing token: the lease says who *should* act, the epoch lets downstream stores reject whoever *shouldn't anymore*.
+- Stay small: a fixed 3-or-5-node cluster regardless of how large the scheduler and worker fleets grow — coordination traffic here is lease renewals, not per-job writes.
+
+**Where it breaks.** The lease alone does not prevent double-firing — that's the famous hole. A GC-paused leader can be declared dead, lose the lease, and resume still believing it holds the crown. The coordination service cannot stop the zombie from *acting*; it can only ensure the zombie's epoch is stale so the executions DB bounces its writes. Never let a design review end at *"we use ZooKeeper for locking"* — the epoch, carried on every side effect, is the actual guarantee.
+
+### ⏰ Scheduler tick
+`Scheduler` · `Python worker`
+
+The **Scheduler tick** is the elected, fenced heartbeat of the system: one logical process that must exist (or due jobs are silently missed) and must be *singular* (or every due job is enqueued twice). Every five minutes it range-reads the current hour bucket for PENDING executions due within the window and hands each to the delay queue with delay = due − now. It deliberately does no job work — read and enqueue is cheap enough that a single leader carries 10k executions/second, which is why the sequenced answer is leader-elect first, partition the keyspace only when tick latency data says so.
+
+**Responsibilities**
+
+- Hold the coordination lease; tick **only while leader**, and carry the lease's epoch on every side effect.
+- Poll a **bounded window** — one or two bucket partitions, never a scan over job definitions.
+- Enqueue each due execution with its per-message delay and the current fencing epoch.
+- Trust clocks carefully: monotonic clock for sleep intervals (wall clocks jump backward), monitored wall time for the due comparison.
+
+Three classes carry the loop — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class LeaderLease {
+        +is_leader() bool
+        +epoch() int
+    }
+    class WindowPoller {
+        +poll(now) list~Execution~
+    }
+    class Dispatcher {
+        +dispatch(execution, delay, epoch)
+    }
+    LeaderLease --> WindowPoller : tick only while leader
+    WindowPoller --> Dispatcher : due executions
+    note for LeaderLease "epoch = fencing token —\na paused ex-leader wakes stale\nand is rejected downstream"
+    note for Dispatcher "delay = due − now ·\nthe queue holds the countdown,\nnot a busy-wait"
+```
+
+Each class maps to a file in the forthcoming POC at `06-case-studies/examples/job-scheduler/scheduler/` — click the code-level boxes for their docs.
+
+**Where it breaks.** The zombie: a GC pause between checking the lease and acting on it means the old leader resumes and finishes a tick a new leader already ran. Unpreventable — only made harmless, by the stale epoch bouncing at the store and the worker's idempotent claim absorbing whatever leaked into the queue.
+
+### 🧩 LeaderLease
+`Code` · `Python`
+
+**LeaderLease** owns `is_leader() bool` and `epoch() int` — the scheduler's claim to be *the* scheduler, and the number that makes that claim safe to be wrong about. It acquires the lease in the coordination service, renews it on a heartbeat session, and exposes the lease's monotonically increasing epoch (ZooKeeper's `zxid`, etcd's revision) so every side effect the tick performs can carry it as a **fencing token**.
+
+**Responsibilities**
+
+- Race for the lease as an ephemeral node; hold leadership only while renewals succeed, so a crashed leader's lease lapses on its own and a standby takes over.
+- Gate the tick: WindowPoller runs only while `is_leader()` is true.
+- Surface `epoch()` for the Dispatcher to stamp on every enqueue and every conditional state write.
+
+**The invariant it maintains:** **a stale epoch is rejected downstream — the double-fire guard.** `is_leader()` alone is a lie waiting to happen: a GC pause, VM migration, or page fault can freeze the process *between the check and the act*; the lease expires, a new leader starts ticking, and the old one resumes — unaware any time passed — and finishes its tick. That zombie cannot be prevented, only defanged: its writes carry epoch *n* while the store has already seen *n+1*, so they bounce. The lease decides who should act; the epoch is what actually stops whoever shouldn't anymore.
+
+**Where it breaks.** Fencing protects only stores that check the token — whatever the zombie pushed into the queue before bouncing is a duplicate delivery, absorbed by ExecutionClaimer. Lands in the forthcoming POC at `06-case-studies/examples/job-scheduler/scheduler/leader_lease.py`.
+
+### 🧩 WindowPoller
+`Code` · `Python`
+
+**WindowPoller** owns `poll(now) list~Execution~` — the read that the whole data model was shaped to make cheap. It range-reads the current hour bucket for **PENDING executions due within the next window** (five minutes in this design) and returns them for dispatch. That's it — and the brevity is the point: because the Job service materialized every occurrence into a time-bucketed Execution row at creation, the poller never touches a cron expression. The question is never *"which of all my definitions is due?"* (a scan) but *"what did we already decide should happen soon?"* (a bounded range read of one or two partitions).
+
+**Responsibilities**
+
+- Range-read the due window: PENDING rows in the current bucket with `planned_time ≤ now + window` — bounded work per tick, independent of total job count.
+- Run only when LeaderLease says so — a poller ticking without the lease is the two-cron-boxes failure reborn.
+- Compare due-ness against monitored **wall time**, but never derive its own sleep interval from wall-clock subtraction — time-of-day clocks can jump backward, so intervals ride the monotonic clock.
+
+**The invariant it maintains:** **work per tick is bounded by the window, not by the job count** — a 5-minute window at 10k executions/second is ~3M rows per cycle, amortized into one cheap range read every five minutes instead of a 20k-row query every two seconds.
+
+**Where it breaks.** The hot bucket: ~36M rows land in each hour partition at target scale, so the bucket key carries a small hash suffix and the poller reads the suffixes in parallel. Lands in the forthcoming POC at `06-case-studies/examples/job-scheduler/scheduler/window_poller.py`.
+
+### 🧩 Dispatcher
+`Code` · `Python`
+
+**Dispatcher** owns `dispatch(execution, delay, epoch)` — the hand-off from the lazy layer to the precise one. For each due execution the WindowPoller returns, it enqueues the `execution_id` into the delay queue with **delay = due − now** and the current fencing epoch. The delay is the design decision: **the queue holds the countdown, not a busy-wait**. Nothing in the scheduler sleeps until 10:00:00 or polls every two seconds to see if it's time — the message itself becomes visible at the due moment, which is how a 5-minute poll cadence coexists with a 2-second precision SLA.
+
+**Responsibilities**
+
+- Enqueue each due execution with its per-message delay, so precision is the queue's job and poll frequency stops being the ceiling.
+- Stamp every message — and the conditional write that marks the Execution row ENQUEUED before pushing — with LeaderLease's **epoch**, so a zombie scheduler's late dispatches are rejectable at the store.
+- Stay dumb about execution: the Dispatcher never runs job code; read-and-enqueue is why a single elected tick carries 10k executions/second.
+
+**The invariant it maintains:** **every enqueue carries the epoch under which it was decided.** A zombie's dispatch bearing a stale epoch bounces at the conditional write; whatever it managed to push into the queue anyway is just one more duplicate delivery bearing the same `execution_id`, which the worker's idempotent claim drops.
+
+**Where it breaks.** The queue's ingest quota, before its architecture — an SQS-style default of ~3k messages/second needs raising at target scale. Lands in the forthcoming POC at `06-case-studies/examples/job-scheduler/scheduler/dispatcher.py`.
+
+### 📮 Delay queue
+`Message queue` · `SQS-style queue`
+
+The **Delay queue** is the second layer of the two-layer core, and it exists because polling can't be both cheap and precise: a 2-second poll at 10k executions/second fetches ~20k rows per query and makes the poll period the precision ceiling, melting the database first. So the scheduler polls a lazy 5-minute window, and the queue converts *"rows due soon"* into *"messages that appear exactly on time"* — **the queue holds the countdown**, per-message delay = due − now, instead of anything busy-waiting.
+
+**Responsibilities**
+
+- Release each message at its due moment (native per-message delay), giving second-level precision decoupled from poll frequency.
+- Run the **visibility timeout** protocol: on delivery the message is hidden (~30 s); the worker extends the window by heartbeating; silence means the window lapses and the message reappears for a healthy worker — failure detection with no extra infrastructure.
+- Deliver **at-least-once**: the broker cannot know whether a missing ack means *"died before the work"* or *"died after, before the ack,"* so it redelivers in both cases. Duplicates are the worker's problem by design.
+- Shunt a message to the DLQ after max receives — the poison-job circuit breaker.
+
+Note the family: a per-message broker with acks, *not* a log. A Kafka-style log delivers in append order, so a job due in 30 seconds would sit behind five minutes of earlier messages; here order rides in the delay, not the log.
+
+**Where it breaks.** Quotas before architecture: an SQS-style default of ~3k messages/second (with batching) needs a quota increase at 10k/s. And redelivery reorders — harmless only because executions are independent and self-timed.
+
+### 🛠️ Worker fleet
+`Worker` · `Python workers (containers)`
+
+The **Worker fleet** is where *"exactly-once"* gets assembled from parts that individually promise less. Everything upstream duplicates by design — a zombie scheduler double-enqueues, the queue redelivers on a lost ack, retries re-send — and every duplicate carries the *same* `execution_id`. So the worker's first act is a **conditional claim**: flip the Execution row PENDING → RUNNING only if it isn't already claimed; a duplicate finds the row claimed or COMPLETED and drops the message. At-least-once delivery plus an idempotent claim at the effect = **effectively-once execution** — an outcome you assemble, never a delivery guarantee you buy.
+
+**Responsibilities**
+
+- Claim idempotently, keyed by `execution_id` and fencing epoch — stale or already-claimed is a silent no-op.
+- **Heartbeat while running**: extend the queue's visibility timeout every ~15 s; stop (crash, pause, network death) and the message reappears in ≤30 s for a healthy worker — supporting multi-minute jobs without a multi-minute detection window.
+- Catch visible failures: mark RETRYING with attempt count, re-enqueue with exponential backoff, give up into FAILED after ~3 attempts.
+
+Two classes carry that work — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class ExecutionClaimer {
+        +claim(execution_id, epoch) bool
+    }
+    class Heartbeat {
+        +beat(execution_id)
+    }
+    ExecutionClaimer --> Heartbeat : claimed → keep alive
+    note for ExecutionClaimer "conditional PENDING → RUNNING ·\nstale epoch or already claimed = no-op —\nduplicates die here"
+    note for Heartbeat "extends visibility timeout ·\nsilence ⇒ redelivery —\na dead worker becomes a retry"
+```
+
+Each class maps to a file in the forthcoming POC at `06-case-studies/examples/job-scheduler/worker/` — click the code-level boxes for their docs.
+
+**Where it breaks.** A paused worker can resume as a zombie and finish a job another worker re-ran: the fence protects the *record* (its stale write bounces), but only idempotent task design protects the *world* — you can't retract a twice-sent email.
+
+### 🧩 ExecutionClaimer
+`Code` · `Python`
+
+**ExecutionClaimer** owns `claim(execution_id, epoch) bool` — the worker's first act on every delivery, and the single point where the system's many duplicates go to die. Every path that can duplicate — a zombie scheduler double-enqueueing, the queue redelivering after a lost ack, a retry after a crash — produces another message bearing the *same* `execution_id`. The claimer turns that shared key into a guarantee: a **conditional write** flips the Execution row PENDING → RUNNING only if it isn't already claimed at this attempt; on success the worker proceeds, on failure it silently drops the message.
+
+**Responsibilities**
+
+- Execute the conditional claim keyed by `execution_id` and fencing epoch — the offset-tagged-write idea from stream processing: store the processing marker *with* the effect, so a replay detects itself.
+- Treat rejection as normal operation, not error: a claimed or COMPLETED row means someone else owns this occurrence; a stale epoch means the claimant is a zombie. Either way, no-op.
+- Record the attempt count, so redelivery after a genuine crash claims as attempt N+1 rather than colliding with attempt N's stale RUNNING row.
+
+**The invariant it maintains:** **conditional claim keyed by execution_id + epoch; stale or already-claimed = no-op.** This is how at-least-once delivery becomes *effectively-once execution* — an outcome assembled at the effect, not a delivery guarantee.
+
+**Where it breaks.** The claim protects the *record*; the job's external side effects need their own idempotence (*"set counter to X,"* not *"increment"*) — you can't recount a sent email. Lands in the forthcoming POC at `06-case-studies/examples/job-scheduler/worker/execution_claimer.py`.
+
+### 🧩 Heartbeat
+`Code` · `Python`
+
+**Heartbeat** owns `beat(execution_id)` — the worker's proof of life, implemented as **extending the queue's visibility timeout** while the job runs. The elegance is what it *doesn't* need: no central health checker polling thousands of workers (doesn't scale, false-positives on blips, and the monitor itself fails), no per-job database leases (~50k renewal writes/second of pure overhead at target scale, plus every clock hazard the coordination service exists to tame). The queue already tracks every outstanding delivery — so liveness is just *"keep the message hidden."*
+
+**Responsibilities**
+
+- On delivery, the message is invisible for a short window (~30 s); beat every ~15 s to extend it for as long as the job genuinely runs — arbitrarily long jobs, short detection.
+- Stop beating — crash, GC pause, network partition, it doesn't matter which — and do *nothing else*: silence is the signal. The window lapses, the message reappears, and a healthy worker claims attempt N+1.
+- Stay per-execution: the heartbeat vouches for one running job, not for the worker process, so a wedged job can't hide behind a healthy host.
+
+**The invariant it maintains:** **stop heartbeating ⇒ redelivery** — the liveness signal that turns a dead worker into a retry, in ≤30 seconds, with zero extra infrastructure. This is also why *"size the visibility timeout to the longest job"* is wrong: a 6-hour timeout strands a minute-one crash for 6 hours; short-timeout-plus-extension detects it in seconds.
+
+**Where it breaks.** A *paused* worker resumes and keeps working on a job already redelivered — the heartbeat can't tell it; ExecutionClaimer's fence and idempotent task design absorb the zombie. Lands in the forthcoming POC at `06-case-studies/examples/job-scheduler/worker/heartbeat.py`.
+
+### 📮 Dead-letter queue
+`Message queue` · `DLQ`
+
+The **Dead-letter queue** is the circuit breaker for the failure retry cannot fix: determinism. Some jobs fail every time — a bug in the task code, malformed parameters — and without a bound, a poison message loops forever: delivered, crashes the worker, visibility timeout lapses, redelivered, again. Wasted capacity at best; at worst a consumer that spends its life dying. The retry machinery that makes *transient* failures invisible is exactly what makes *deterministic* failures immortal, so a separate exit has to exist.
+
+**Responsibilities**
+
+- Receive any message after **max delivery attempts** (the queue counts receives; ~3 attempts with exponential backoff before giving up), quarantining it so one bad job never blocks the pipeline.
+- Page a human — a non-empty DLQ is an alarm, not a backlog. The operator can drop the message, fix the task code, or re-drive it after the fix.
+- Keep the user's view honest: the corresponding Execution goes to FAILED with a reason, so the owner sees a failed run in the dashboard instead of wondering why their report never came.
+
+**Where it breaks.** The DLQ round-trip is one of the ways an execution ends up *late through no fault of its schedule* — which is why the misfire policy exists. When a re-driven job finally runs, *"run late or skip?"* is a per-job product decision, not a queue default: a billing run is owed regardless of the outage; forty stale cache warms are pure waste. DLQ depth belongs on the same dashboard as schedule lag, alarmed from zero.
+
+</details>
 
 ## ⚖️ Trade-offs
 

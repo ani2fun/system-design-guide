@@ -235,29 +235,109 @@ There is no universally right answer — the choice falls out of the availabilit
 
 **The expert layer: what does *"accurate"* even mean across regions?** A 100/minute limit enforced independently in three regions is a global limit of up to 300/minute for a client that spreads its traffic — a *global* limit needs *global* state, and there's a cost ladder for how global you make it. Rung one: independent per-region limits — cheapest, worst-case error = limit × regions; fine when clients are region-sticky. Rung two: home each *key* to one region (hash key → region, as we hashed to a shard) — exact global counts, but far-away clients pay cross-region latency per check, straining the 5 ms budget. Rung three: local enforcement with async cross-region replication — local latency back, plus an over-admission window equal to the lag. Rung four — synchronous global coordination — exact, at a latency no interactive API accepts. This design sits at rungs one/three: limiters and Redis per region, eventual consistency between regions in exchange for latency. (The rung structure beyond that: rule of thumb, not from source.) One honest footnote even within a region: the Lua script is atomic *on the shard's primary*, and Redis [replication](/synapse/system-design-from-first-principles/distributed-data/replication) is asynchronous — a failover can promote a replica missing the last moments of counter updates, so recently spent tokens reappear and a few extra requests slip through. **Race-free is not the same as exact under replication**; the script eliminated the concurrency anomaly, not the replication one. Seconds of over-admission during a failover is a fine trade — the skill being tested is knowing you made it.
 
-The whole component once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `rate-limiter.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the limiter. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_ratelimiter_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Rate limiter — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-rate-limiter" root="System Context"
+direction: right
+
+classes: {
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+caller: "Calling client\n[Person]" {
+  class: client
+  shape: person
+}
+
+sys: "Rate Limiter\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+caller -> sys: "requests (429 + Retry-After when over limit)"
+
+layers: {
+  container: {
+    direction: down
+
+    caller: "Calling client\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    gateway: "API gateway (enforcement point)\n[Gateway middleware]" {
+      class: edge
+    }
+
+    limiter: "Limiter\n[Python middleware]" {
+      class: svc
+      link: _.layers.code
+    }
+
+    state: "Counter state\n[Redis]" {
+      class: data
+      shape: cylinder
+    }
+
+    rules: "Rule store\n[Config DB]" {
+      class: data
+      shape: cylinder
+    }
+
+    protected: "Protected services\n[Internal APIs]" {
+      class: svc
+    }
+
+    gateway -> limiter: "allow(key)?"
+    limiter -> state: "EVALSHA: atomic check-and-increment"
+    limiter -> rules: "rule refresh (cached, async)"
+    gateway -> protected: "allowed requests only"
+  }
+
+  code: {
+    direction: down
+
+    limiter: "Limiter\n[Python middleware]" {
+      class: svc
+
+      rule_resolver: "RuleResolver" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/09-rate-limiter/domain/rule_resolver.py"
+      }
+      window_algorithm: "WindowAlgorithm" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/09-rate-limiter/domain/window_algorithm.py"
+      }
+      atomic_counter: "AtomicCounter" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/09-rate-limiter/domain/atomic_counter.py"
+      }
+    }
+
+    state: "Counter state\n[Redis]" {
+      class: data
+      shape: cylinder
+    }
+
+    rules: "Rule store\n[Config DB]" {
+      class: data
+      shape: cylinder
+    }
+
+    limiter.window_algorithm -> limiter.atomic_counter: "atomic check-and-increment"
+    limiter.rule_resolver -> limiter.window_algorithm: "rule → algorithm + params"
+    limiter.atomic_counter -> state: "Lua script, one round-trip"
+    limiter.rule_resolver -> rules: "periodic refresh"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the limiter (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_ratelimiter_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Rate limiter — C4 code level (inside the limiter)"
-></iframe>
 
 A **runnable implementation** lives at `_proof-of-concepts/07-case-studies/09-rate-limiter/` in the repo root — the three classes above (`RuleResolver`, `WindowAlgorithm`, `AtomicCounter`) over Redis, each algorithm a real atomic Lua script.
 
@@ -271,6 +351,176 @@ cd _proof-of-concepts/07-case-studies/09-rate-limiter
 `./run test` proves the decision holds under concurrency: a `limit=5` key admits 5 then denies; a `vip:` tier (limit 100) admits all (rule resolution by prefix); a token bucket admits a burst of 3 then denies the 4th; and — the point — **20 requests fired concurrently at a `limit=5` key admit exactly 5**, because check-and-increment runs as one atomic Lua script rather than a read-then-write the app could race.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>10 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Calling client
+`Actor` · `HTTP clients · SDKs · scripts`
+
+The **Calling client** is any API consumer — a mobile app, a partner integration, a broken retry loop, a scraper, a DDoS source. The limiter's founding assumption is that it *cannot tell these apart by intent*: it counts requests per key (user ID, IP, or API key) and enforces the rule, treating intent as unknowable.
+
+**Responsibilities**
+
+- Identify itself through whatever the gateway can extract: an auth token (user ID), `X-Forwarded-For` (IP), or `X-API-Key`.
+- Honor the contract's other half when denied: a **429 Too Many Requests** with `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `Retry-After` — enough to back off intelligently instead of hammering with doomed retries.
+- Well-built SDKs go further and rate-limit *client-side*, reading `Remaining` and slowing down before hitting the wall — a genuine complement, never a substitute, since clients can't be trusted for security.
+
+**Where it breaks.** The adversarial tail: a client that ignores every header and retries in a tight loop becomes a **hot key**, concentrating load on one Redis shard while every answer is *"no"* — checks cost capacity even when the verdict is deny. That's why the design pairs limits with an automatic blocklist for repeat offenders and upstream DDoS protection: past a certain rate, the cheapest correct answer is not counting at all.
+
+### 🏢 Rate Limiter
+`System` · `Gateway middleware + Redis counter state`
+
+The **Rate Limiter** is an infrastructure *component*, not a product: one decision — `allow(key)?` — made a million times a second, correctly under concurrency, in under 5 ms per check. Everything inside it exists because the naive hash-map-and-if-statement dies three deaths in production: per-node counters make a 100/minute limit worth 100 × the server count (**counters must be shared, not local**); process memory zeroes on every deploy; and a concurrent read-then-write **loses updates** on exactly the load it exists to control.
+
+**Responsibilities**
+
+- Check every request at the edge — inside the **API gateway**, before any application code runs — so denied traffic never costs the backends anything.
+- Resolve which rule applies (per-user, per-IP, per-endpoint, most-restrictive wins) from a locally cached **rule store**.
+- Run the check as **one atomic round-trip** to shared Redis **counter state**: a Lua script reads, refills, decides, and writes as a single indivisible step, closing the lost-update race.
+- Answer denials with 429 + `Retry-After` and the `X-RateLimit-*` headers — fail fast, never queue.
+
+**Where it breaks.** The limiter is coupled to the platform's worst moments: Redis failures *correlate* with traffic spikes, which is why this design **fails closed** — brief rejections beat pouring a flood onto drowning backends — with an alert on entering the degraded mode, because a limiter that silently stopped limiting looks healthy until the backends fall over.
+
+### 🚪 API gateway (enforcement point)
+`API gateway` · `Gateway middleware`
+
+The **API gateway** is where the limiter's placement decision landed — the most common production pattern, and the one that makes rejected traffic *free*. Every request passes here before routing, so a 429 turns around at the edge and the application fleet never sees it; the alternative placements (in-process counters, a dedicated limit service) either re-derive the per-node accuracy bug or add a network hop and a new critical service to every request.
+
+**Responsibilities**
+
+- Extract the limiting key from what the HTTP request exposes: auth token → user ID, `X-Forwarded-For` → IP, `X-API-Key` — and call the limiter middleware before any routing decision.
+- Forward allowed requests with `X-RateLimit-Limit` / `Remaining` / `Reset` attached; answer denials immediately with **429 + Retry-After** — reject, never queue.
+- Keep the check inside its single-digit-millisecond budget: **pooled, persistent connections** to Redis (a fresh TCP handshake costs 20–50 ms — several times the entire < 5 ms budget on its own) and **geographic co-location** with the counter shards.
+
+The placement's honest limitation is *context*: the gateway sees only the HTTP request, so *"premium users get 10× limits"* works only if the tier is readable from it — e.g. encoded in the JWT.
+
+**Where it breaks.** When Redis is unreachable, this container is where the fail-open/fail-closed stance executes. This design fails **closed**: limiter failures correlate with traffic spikes, so the moments you'd fail open are precisely the moments it's most dangerous.
+
+### ⚙️ Limiter
+`Service` · `Python middleware`
+
+The **Limiter** is the middleware where the design's three corrected instincts meet: state lives *out of process* in shared Redis, rules are resolved from a local cache, and the check-and-increment is **one atomic round-trip** — because a read followed by a write, however carefully transacted, leaves a gap where two concurrent checks both see the last token and both spend it (the **lost update**). The whole decision — resolve rule, run algorithm, read-refill-decide-write — fits inside the request's single-digit-millisecond budget only because the state round-trip is exactly one.
+
+**Responsibilities**
+
+- Resolve which rule applies to the key — most-restrictive wins across per-user, per-IP, and per-endpoint layers — without ever blocking on the rule store.
+- Run the configured window algorithm (this design's pick: token bucket, for its tunable burst) against shared counter state via `EVALSHA`.
+- Answer allow/deny with the header payload: limit, remaining, reset, and `Retry-After` on denial.
+
+Three classes carry that pipeline — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class RuleResolver {
+        +resolve(key) Rule
+    }
+    class WindowAlgorithm {
+        +check(key, rule) Decision
+    }
+    class AtomicCounter {
+        +check_and_increment(key, window) tuple
+    }
+    RuleResolver --> WindowAlgorithm : rule → algorithm + params
+    WindowAlgorithm --> AtomicCounter : atomic check-and-increment
+    note for RuleResolver "rules cached locally —\nnever blocks the decision path"
+    note for WindowAlgorithm "strategy: fixed window · sliding\ncounter · token bucket"
+    note for AtomicCounter "EVALSHA: the whole read-modify-write\nin ONE Redis round-trip"
+```
+
+Each class maps to a file in the POC at `06-case-studies/examples/rate-limiter/app/` (deferred to the hands-on phase) — click the code-level boxes for their docs.
+
+**Where it breaks.** When Redis is unreachable the limiter can't answer honestly, and this design's stance is **fail closed** — limiter failures correlate with the traffic spikes that make failing open most dangerous. The degraded mode must be alerted on, not discovered.
+
+### 🧩 RuleResolver
+`Code` · `Python`
+
+**RuleResolver** answers *"which policy governs this key?"* — mapping a user ID, IP, or API key to the applicable rule: tier, limit, window or refill rate. Where several rules cover one request (per-user, per-IP, per-endpoint), it resolves to the **most restrictive** — Alice with budget left is still blocked if her IP hit its cap.
+
+**Responsibilities**
+
+- `resolve(key) → Rule`: look up the governing rule from a **local in-memory cache**, refreshed from the rule store asynchronously (polling, ~every 30 s).
+- Layer rules correctly: evaluate every matching scope, enforce the tightest.
+- Hand `WindowAlgorithm` the resolved parameters — algorithm choice, limit, window/refill — so policy and mechanism stay separate concerns.
+
+**The invariant it protects:** the decision path **never blocks on the rule store**. Rules are configuration — tiny, read-heavy, rarely changed — so a check must never spend its < 5 ms budget on a config lookup, and a rule-store outage must degrade rule *freshness*, never check *availability*. The cost of that invariant is honest and bounded: a rule change propagates in up to one polling interval (~30 s), which is the worst-case delay for an emergency limit cut — the number that motivates push-based config when seconds matter.
+
+**Where it breaks.** Stale-cache edges: a limiter that can't reach the rule store keeps enforcing its last-known rules — usually the right failure mode, but it means a bad rule also *lingers* for the polling interval after the fix. Versioned rules and rollback exist for exactly this. Implemented in the forthcoming POC at `06-case-studies/examples/rate-limiter/app/rule_resolver.py`.
+
+### 🧩 WindowAlgorithm
+`Code` · `Python`
+
+**WindowAlgorithm** is the algorithm zoo behind one interface: `check(key, rule) → Decision`. It's a strategy class because the algorithms differ in **what they promise, not just what they cost** — each has its own *burst personality*, and choosing one is choosing a contract:
+
+- **Fixed window** promises only *"no window exceeds N"* — and its personality is the **boundary burst**: spend the full limit at 12:00:59 and again at 12:01:00, and 200 requests pass in two seconds against a *"100/minute"* rule. No window exceeded its count; the rule as a user understands it was violated by 2×.
+- **Sliding window counter** smooths that boundary by weighting the previous window's counter — but it *assumes even spread*; front-loaded traffic skews the estimate. An approximation, and the senior move is saying so.
+- **Token bucket** (this design's pick) makes burst a **first-class dial, not a bug**: capacity *B* is the burst, refill rate *r* the sustained rate — *"burst to 100, sustain 10/minute"* — fitting naturally bursty API traffic. Its quirk: idle clients always hold a full bucket, so every quiet client is entitled to one burst.
+
+**Responsibilities**
+
+- Translate the resolved rule into algorithm parameters and delegate the actual state mutation to `AtomicCounter` — this class computes *nothing* against local state, because shared-not-local counters are the design's first law.
+- Return the full decision payload: allowed, remaining, reset, retry-after.
+
+**Where it breaks.** Only by misuse: implementing the read-refill-decide logic *here*, in application code, reopens the read-modify-write gap that `AtomicCounter` exists to close. Implemented in the forthcoming POC at `06-case-studies/examples/rate-limiter/app/window_algorithm.py`.
+
+### 🧩 AtomicCounter
+`Code` · `Python + Redis Lua`
+
+**AtomicCounter** is the race-killer. The natural implementation — read the bucket (`HMGET`), compute the refill, decide, write back in a `MULTI`/`EXEC` transaction — is wrong in a precisely nameable way: the transaction makes the *writes* atomic, but the read happened outside it. Two requests for the same key land on two gateways in the same millisecond; both read one token, both allow, both write back a bucket decremented from the state *they* read. That anomaly is a **lost update** — two concurrent read-modify-write cycles where one modification overwrites the other as if it never happened — and counter increments are its canonical victim.
+
+**Responsibilities**
+
+- `check_and_increment(key, window) → (allowed, remaining)`: ship the *entire* read-refill-decide-write sequence to Redis as a Lua script invoked via `EVALSHA`, executing as one indivisible step with no other command interleaving.
+- Set `EXPIRE` (~1 hour, refreshed per check) inside the same script, so idle keys self-delete instead of leaking.
+- Keep the state round-trip to exactly one, over pooled connections — the check's share of the < 5 ms budget is network, not Redis.
+
+**The invariant it protects:** the atomic boundary covers the **whole read-modify-write cycle** — one atomic round-trip kills the race. Concurrent checks serialize inside Redis; the second sees the first's decrement. No bigger transaction fixes a gap that begins at the read; moving the cycle *into* the store does.
+
+**Where it breaks.** Atomicity holds *on the shard's primary*; replication is async, so a failover can resurrect recently spent tokens — bounded over-admission, accepted knowingly. Implemented in the forthcoming POC at `06-case-studies/examples/rate-limiter/app/atomic_counter.py`.
+
+### ⚡ Counter state
+`Cache` · `Redis`
+
+**Counter state** is the mutable heart of the design — per-key windows and buckets, written on *every allowed request* at 1M checks/second. It exists because the limit is a **global statement**: a user capped at 100/minute across five gateway nodes needs one counter all five consult, or each node sees only its slice and the effective limit becomes 100 × the node count, modulated by load-balancer luck. Local counters were never enough; shared state is the whole point.
+
+**Responsibilities**
+
+- Hold, per key, exactly what the algorithm must remember — for the chosen token bucket, two numbers: current tokens and last-refill timestamp.
+- Execute the Lua script (`EVALSHA`) as **one atomic unit**, single-threaded, so concurrent check-and-increments serialize instead of losing updates.
+- Self-clean: an `EXPIRE` of ~1 hour, refreshed on each check, so idle keys evaporate instead of leaking memory forever.
+- Scale by **sharding on the key** — Redis Cluster's 16,384 hash slots — with the non-negotiable rule that all of one key's traffic lands on one shard, or the key's state splits and the per-node bug is rebuilt inside the data layer. One instance handles ~100k–200k ops/second; ~10 shards meets 1M checks/second. Capacity is not the issue: 10M active buckets fit in roughly 1.5 GB.
+
+**Where it breaks.** Hot keys — one aggressive client concentrates on one shard no matter how many exist — and failover: replication is asynchronous, so a promoted replica can forget recently spent tokens. Race-free is not the same as exact under replication; seconds of over-admission is a trade this design makes knowingly.
+
+### 🗄️ Rule store
+`Relational database` · `Config DB`
+
+The **Rule store** holds the policies — which clients and endpoints a rule covers, the limit, the window or refill rate: *"Search API: 10/minute per IP."* Rules are configuration, not data: tiny, read-heavy, rarely changed — which is why they are the one piece of state deliberately kept **off** the decision path. Limiters cache rules locally and refresh them asynchronously (polled every ~30 s); a check never waits on this container.
+
+**Responsibilities**
+
+- Express layered policy the way real platforms do: per-user, per-IP, global, and per-endpoint rules evaluated together, **most-restrictive wins** — search runs tight, cheap reads run loose, premium tiers buy higher ceilings.
+- Support rule changes *without deploys*: limits change under pressure — a launch needs a temporary raise, an attack an emergency cut. Polling is the default shape; push (pub/sub) earns its complexity only when seconds matter, e.g. active security incidents.
+- Version rules so a bad limit can be rolled back — a mistyped rule is a self-inflicted outage, and the rollback path is part of the design.
+
+**Where it grows.** Tuning limits is ongoing operational work, not a launch-time constant: the rules table encodes a guess about what *"abusive"* means, and production teaches the real answer — start permissive, watch the per-key distribution, ratchet down. The ~30 s polling interval is the worst-case delay for an emergency change; if that's too slow for your threat model, this container grows a push channel.
+
+### ⚙️ Protected services
+`Service` · `Internal APIs`
+
+The **Protected services** are the reason the limiter exists — the downstream application fleet whose capacity, database connections, and latency SLOs the limiter defends from traffic they never agreed to serve. In this design they are deliberately passive: by the time a request reaches them, the rate-limit decision is already made and paid for at the edge.
+
+**Responsibilities**
+
+- Serve only *admitted* traffic: the gateway forwards allowed requests and turns denials around as 429s at the edge, so a rejected request costs this fleet nothing — no thread, no connection, no database read. That asymmetry is the entire argument for edge placement.
+- Stay out of the limiting business: no per-service counters, no local hash maps. Any counting done here re-derives the per-node accuracy bug the design exists to kill.
+- Provide the *demand signal* for tuning: these services' capacity and high-percentile legitimate usage are what the rule store's limits should be set just above.
+
+**Where it breaks.** In exactly one scenario — the limiter's own failure. If Redis goes down and the platform failed *open*, the flood these services were being protected from arrives at the worst possible moment, because limiter failures correlate with traffic spikes. That correlation is why this design fails **closed**: brief 429s at the edge beat cascading collapse here. The monitoring corollary: an alert on entering fail-open mode, because from this fleet's perspective a silently disabled limiter is indistinguishable from a healthy one — until it isn't.
+
+</details>
 
 ## ⚖️ Trade-offs
 

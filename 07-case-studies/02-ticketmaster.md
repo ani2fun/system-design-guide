@@ -270,115 +270,67 @@ The 100:1 read skew means the catalog path, not the booking path, carries the vo
 2. **Database full-text indexes.** Postgres and MySQL ship full-text extensions that index tokenized words, making *"Taylor"* fast without new infrastructure — at the price of index storage, slower writes, and awkward maintenance.
 3. **A search-optimized store: Elasticsearch.** An inverted index maps each term to the documents containing it, so keyword lookup is an index probe, not a scan; fuzzy matching absorbs typos (*"Tayler Swift"*) that SQL can't reasonably serve. Keep it in sync via **change data capture** from Postgres — inserts, updates, deletes stream into the index near-real-time. Costs, plainly: a second stateful cluster, a sync pipeline that can lag or break, and eventual consistency between catalog and index. For repeated queries, layer caching on top — normalized query → results in Redis with TTLs, Elasticsearch's node/shard caches, even CDN caching for non-personalized searches. Inverted-index *internals* get their own treatment in [the Search building block](/synapse/system-design-from-first-principles/building-blocks/search); the interview needs the shape and the costs.
 
-All three dives assembled into one picture — the final architecture in C4 Container notation, pan-and-zoomable (rendered live from this module's `c4/ticketmaster.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the decisive service. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_ticketmaster_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Ticketmaster — C4 Container view (final architecture)"
-></iframe>
-
-Ticketing Platform again as a **D2 walkthrough** — one source, three boards. Click **Ticketing Platform** to drop into the containers, then **the booking service** to reach the code level; ◀ ▶ ⌂ step back out.
-
-```d2 boards name="ticketmaster" root="System Context"
+```d2 boards name="c4-ticketmaster" root="System Context"
 direction: right
 
 classes: {
-  actor: {style: {fill: "#f3f4f6"; stroke: "#6b7280"}}
-  edge:  {style: {fill: "#dbeafe"; stroke: "#2563eb"}}
-  svc:   {style: {fill: "#dcfce7"; stroke: "#16a34a"}}
-  data:  {style: {fill: "#ffedd5"; stroke: "#ea580c"}}
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  external: { style: { fill: "#f8fafc"; stroke: "#94a3b8"; font-color: "#475569"; stroke-dash: 3 } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
 }
 
-fan: "Fan\n[Person]\nbrowses, queues, books seats" {
+fan: "Fan\n[Person]" {
+  class: client
   shape: person
-  class: actor
 }
 
-sys: "Ticketing Platform\n[Software System]\nN fans, 1 seat — never sell it twice" {
+pay: "Payment provider\n[External System]" {
+  class: external
+}
+
+sys: "Ticketing Platform\n[Software System]" {
   class: svc
   link: layers.container
 }
 
-psp: "Payment provider\n[External PSP]\ncharges the card; webhooks confirm" {
-  class: edge
-}
-
 fan -> sys: "HTTPS: browse, queue, book"
-sys -> psp: "authorize and capture"
 
 layers: {
   container: {
-    direction: right
+    direction: down
 
-    fan: "Fan" {
+    fan: "Fan\n[Person]" {
+      class: client
       shape: person
-      class: actor
     }
 
-    gate: "API gateway + waiting room\n[Gateway + queue]\nadmission control: a controlled trickle reaches checkout" {
+    gate: "API gateway + waiting room\n[Gateway + queue]" {
       class: edge
     }
 
-    browse: "Browse and search service\n[Python - FastAPI]\nread-heavy" {
+    browse: "Browse & search service\n[Python · FastAPI]" {
       class: svc
     }
 
-    booking: "Booking service\n[Python - FastAPI]\nthe critical section" {
+    search: "Search index\n[Postgres FTS (POC) / Elasticsearch]" {
+      class: data
+      shape: cylinder
+    }
+
+    cache: "Event & seat-map cache\n[Redis]" {
+      class: data
+      shape: cylinder
+    }
+
+    booking: "Booking service\n[Python · FastAPI]" {
       class: svc
       link: _.layers.code
-    }
-
-    search: "Search index\n[Postgres FTS / Elasticsearch]" {
-      class: data
-      shape: cylinder
-    }
-
-    cache: "Event and seat-map cache\n[Redis]\nseconds-stale outside checkout, on purpose" {
-      class: data
-      shape: cylinder
-    }
-
-    holds: "Seat-hold store\n[Redis]\nseat to holder, automatic TTL expiry" {
-      class: data
-      shape: cylinder
-    }
-
-    orders: "Orders DB\n[PostgreSQL]\nsystem of record" {
-      class: data
-      shape: cylinder
-    }
-
-    psp: "Payment provider" {
-      class: edge
-    }
-
-    fan -> gate: "HTTPS"
-    gate -> browse: "browse and search traffic"
-    gate -> booking: "admitted checkout traffic"
-    browse -> cache: "event pages, seat maps"
-    browse -> search: "queries"
-    booking -> holds: "acquire / release hold (TTL)"
-    booking -> orders: "confirm booking (transactional)"
-    booking -> psp: "authorize and capture"
-  }
-
-  code: {
-    direction: right
-
-    hold: "SeatHoldService\nper-seat TTL holds (SET NX PX)\nexpiry frees a crashed checkout" {
-      class: svc
-    }
-
-    confirmer: "BookingConfirmer\ntransactional confirm with row locks\nthe final arbiter against double-sells" {
-      class: svc
-    }
-
-    payment: "PaymentClient\nauthorize / capture\none idempotency key per attempt" {
-      class: svc
     }
 
     holds: "Seat-hold store\n[Redis]" {
@@ -391,31 +343,63 @@ layers: {
       shape: cylinder
     }
 
-    psp: "Payment provider" {
-      class: edge
+    pay: "Payment provider\n[External System]" {
+      class: external
     }
 
-    confirmer -> hold: "verify hold before confirm"
-    confirmer -> payment: "capture on success"
-    hold -> holds: "SET NX PX / DEL"
-    confirmer -> orders: "BEGIN ... COMMIT"
-    payment -> psp: "PSP API"
+    gate -> browse: "browse & search traffic"
+    gate -> booking: "admitted checkout traffic"
+    browse -> cache: "event pages, seat maps"
+    browse -> search: "queries"
+    booking -> holds: "acquire / release seat hold (TTL)"
+    booking -> orders: "confirm booking (transactional write)"
+    booking -> pay: "authorize & capture payment"
+  }
+
+  code: {
+    direction: down
+
+    booking: "Booking service\n[Python · FastAPI]" {
+      class: svc
+
+      seat_hold_service: "SeatHoldService" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/02-ticketmaster/domain/seat_hold_service.py"
+      }
+      booking_confirmer: "BookingConfirmer" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/02-ticketmaster/domain/booking_confirmer.py"
+      }
+      payment_client: "PaymentClient" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/02-ticketmaster/domain/payment_client.py"
+      }
+    }
+
+    holds: "Seat-hold store\n[Redis]" {
+      class: data
+      shape: cylinder
+    }
+
+    orders: "Orders DB\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    pay: "Payment provider\n[External System]" {
+      class: external
+    }
+
+    booking.booking_confirmer -> booking.seat_hold_service: "verify hold before confirm"
+    booking.booking_confirmer -> booking.payment_client: "capture on success"
+    booking.seat_hold_service -> holds: "SET NX PX / DEL"
+    booking.booking_confirmer -> orders: "BEGIN … COMMIT"
+    booking.payment_client -> pay: "PSP API"
   }
 }
 ```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the decisive service (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_ticketmaster_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Ticketmaster — C4 code level (inside the booking service)"
-></iframe>
 
 A **runnable implementation** lives at `_proof-of-concepts/07-case-studies/02-ticketmaster/` in the repo root — FastAPI + Postgres + Redis via docker-compose, with the three classes above (`SeatHoldService`, `BookingConfirmer`, `PaymentClient`) mirroring the code view 1:1. It isolates the one thing this design exists to protect: the no-double-booking invariant.
 
@@ -429,6 +413,233 @@ cd _proof-of-concepts/07-case-studies/02-ticketmaster
 `./run test` fires **25 concurrent confirms at a single seat** and proves that the `SELECT … FOR UPDATE` path lets **exactly one** win (`double_sold_seats == 0`). It then re-runs the stampede on an intentionally unsafe path (`FOR UPDATE` dropped) and shows the same seat being sold ~20 times — the anomaly the row lock prevents, made concrete. The TTL seat holds (`SET … NX PX`) throttle checkout; the lock is what guarantees correctness.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>13 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Fan
+`Actor` · `Web / mobile client`
+
+The **Fan** browses events, joins on-sales, and books seats — and the single most important fact about them is that they arrive in crowds. When a popular event opens, ~10 million fans show up in the same minute for roughly 50k seats: a 200:1 demand-to-supply ratio, meaning over 99% of them *cannot possibly buy anything*.
+
+**Responsibilities**
+
+- Browse event pages and search the catalog — the 100:1 read-heavy traffic that dominates the system.
+- Join an on-sale: queue in the waiting room, watch a live seat map, pick a seat.
+- Book: hold a seat, spend human minutes typing payment details, confirm.
+
+That human think-time is a design input, not a detail. A fan holds a seat for up to ten minutes while deciding — which is why the design uses TTL holds (a lease that self-releases when the fan wanders off) instead of a database lock pinned across checkout.
+
+**Where it breaks.** Not every *"fan"* is a fan: bots join the queue from thousands of identities to flip inventory, which makes the waiting-room entrance a fairness and abuse surface — rate limits, verified-fan gating, anomaly scoring. And a fan who loses a race is a fan you must fail *visibly and politely*: *"seat is held, pick another"* beats a mystery error at the payment page.
+
+### 🌐 Payment provider
+`External system` · `External PSP (e.g. Stripe)`
+
+An external **payment service provider** (PSP). The booking service authorizes and captures the card here during checkout; confirmation arrives back **asynchronously as a webhook** — and webhooks redeliver.
+
+**Responsibilities**
+
+- Charge the card for a checkout attempt when the booking service calls authorize/capture.
+- Deliver a payment-succeeded webhook that triggers the final confirm transaction.
+- Honor **idempotency keys**: the PaymentClient sends one key per checkout attempt, so a retried capture is a no-op rather than a double charge.
+
+The PSP sits *outside* the correctness boundary on purpose. Payment success does not sell the seat — the confirm transaction in Postgres does, and it re-checks that the ticket row is still sellable before marking it sold. That ordering matters because the PSP's timing is not yours: a webhook can arrive minutes late, after the shopper's ten-minute hold has already expired and the seat has gone to someone else.
+
+**Where it breaks.** Exactly there: a late webhook for an expired hold hits the conditional `UPDATE`, matches 0 rows, and the confirm fails cleanly — refund and apologize, never double-sell. The production sin to avoid is a webhook handler that emails, increments, or charges *outside* that guarded transaction; redelivery then duplicates the side effects even though the sale itself stays correct.
+
+### 🏢 Ticketing Platform
+`System` · `Gateway + FastAPI services + Redis + PostgreSQL`
+
+**Contention is the product**: N fans, 1 seat. The invariant — *never sell a seat twice* — decides the whole design, because at 10M users versus ~50k seats, over 99% of the crowd can't buy anything. This is really **two systems wearing one trench coat**, and keeping them apart is most of the architecture.
+
+**Responsibilities**
+
+- **The read-mostly catalog** (browse + search + cache) serves the 99%: event pages, seat maps, keyword search. Availability-biased, aggressively cached, allowed to be seconds-stale.
+- **The contended transactional core** (booking + holds + orders) serves the few: strongly consistent, no double booking, coordination paid only on the rows where the fight is.
+- **Admission control at the edge** (the waiting room) converts an uncontrollable stampede into a drain the core can sustain.
+
+Note what is *not* hard here: write volume. Selling out a stadium is ~50k successful writes — a trickle. The problem is that they all aim at the same rows: **contention, not load**. So the split consistency posture is per-endpoint, not database-wide — availability for viewing, strong consistency for booking.
+
+**Where it grows.** Each half scales on its own terms: the catalog horizontally (stateless services, cache, search index), the core by *narrowing* — shorter transactions, holds pushed to memory, admission throttled at the gate. Scaling the core by adding servers only multiplies transactions fighting over the same 50k rows.
+
+### 🚪 API gateway + waiting room
+`API gateway` · `Gateway + queue`
+
+**Admission control** — the answer to why *"autoscale the booking path"* fails an on-sale. The spike is a step function that outruns any autoscaler; more booking servers just add transactions converging on the same ~50k ticket rows; and even infinite capacity leaves the seat map a demoralizing blur. So instead of absorbing the crowd, this container *meters* it.
+
+**Responsibilities**
+
+- Route ordinary traffic: browse and search requests to the browse service, admitted checkout traffic to the booking service.
+- During an on-sale (admin-enabled per event), place arriving fans in a **virtual waiting room** — a queue with a connection per waiting user — and dequeue at a controlled rate.
+- Push queue position and estimated wait to those in line; opaque waits convert demand into rage.
+- Record admission so the booking path can enforce that only admitted users book.
+
+The quiet win: the seat map an *admitted* user sees is fresh enough to act on, because only a few thousand others are looking at it. Admission control is a product-shaped solution to a problem (*"render 10M live seat maps"*) that has no technical one.
+
+**Where it breaks.** The queue is a fairness and abuse surface — bots join from thousands of identities to flip inventory, so entry needs rate limits, verification gating, and anomaly scoring. And holding millions of live connections is itself a scaling problem; the trade is deliberate: cheap connection state at the edge instead of contention in the core.
+
+### ⚙️ Browse & search service
+`Service` · `Python · FastAPI`
+
+The storefront for the 99% who never buy. With a ~100:1 read-to-write ratio, this path — not booking — carries the volume, and it's a friendly workload: event details are written once and read millions of times.
+
+**Responsibilities**
+
+- Assemble event pages — event, venue, performers, seat map — serving from the **cache** first (read-through: miss → DB → populate).
+- Answer keyword search by delegating to the **search index**; never scan.
+- Serve seat *availability* differently from static detail: availability is the one thing you must not cache lazily — it's pushed fresh (SSE deltas) or read with short TTLs, while venue geometry and bios take long TTLs.
+
+The service is deliberately stateless: scale it horizontally behind the gateway, and let the cache absorb what would otherwise be millions of identical queries hammering Postgres. Its correctness bar is low by design — a browse page that's seconds stale costs nothing, because the booking path re-checks everything that matters.
+
+**Where it breaks.** The *"Taylor Swift case"*: when seats sell in seconds, even flawless real-time seat-map updates deliver a blur of disappearing green — technically correct, experientially useless. Freshness alone can't fix a 200:1 demand ratio; that's the gateway's waiting room's job. Until then, this container's failure mode is the refresh storm: without the cache and push updates, 10M fans polling the seat map would flatten the database long before anyone books.
+
+### 🔎 Search index
+`Search index` · `Postgres FTS (POC) / Elasticsearch`
+
+An **inverted index** over events, venues, and dates — because the naive alternative, `WHERE name LIKE '%taylor%'`, defeats a B-tree index with its leading wildcard and degenerates into a full scan, nowhere near the 500 ms search budget at catalog scale.
+
+**Responsibilities**
+
+- Map each term to the documents containing it, so keyword lookup is an index probe, not a scan.
+- Serve the queries users actually type — keyword-in-the-middle matches, plus structured filters on date, location, and type.
+- (Elasticsearch tier) absorb typos with fuzzy matching — *"Tayler Swift"* still finds the show.
+
+The technology label is a ladder, and the honest move is naming which rung you're on. The POC uses **Postgres full-text search**: tokenized-word indexes with no new infrastructure, at the price of index storage and slower writes. At scale, a dedicated **Elasticsearch** cluster takes over, kept in sync via **change data capture** from Postgres — inserts, updates, and deletes streaming into the index near-real-time. Repeated queries get caching layered on top: normalized query → results in Redis, plus Elasticsearch's own node caches.
+
+**Where it breaks.** The Elasticsearch rung buys speed with operational weight: a second stateful cluster, a sync pipeline that can lag or break, and **eventual consistency** between catalog and index — a just-created event may be briefly unsearchable. That's acceptable here precisely because search is on the availability side of the split posture; nothing in the booking invariant depends on it.
+
+### ⚡ Event & seat-map cache
+`Cache` · `Redis`
+
+The **Event & seat-map cache** carries the volume side of the 100:1 read skew: event details, venue information, performer bios, seat-map geometry — data written once and read millions of times, the friendliest workload caching gets.
+
+**Responsibilities**
+
+- Serve event pages to the **browse service** keyed `eventId → event object`, read-through: miss → Postgres → populate.
+- Hold long TTLs on static fields, with invalidation triggered from the database when an event actually changes.
+- Absorb what would otherwise be millions of identical queries hammering the transactional store during an on-sale — the same store the booking path needs healthy.
+
+The deliberate word in the model is **seconds-stale**: outside checkout, a browse page that lags reality by a few seconds costs nothing, so the cache is allowed to lie a little in exchange for keeping reads off Postgres.
+
+**Where it breaks.** The one thing this cache must *not* serve lazily is **seat availability** — that is the real-time surface, and it belongs to the SSE push channel (and, during extreme on-sales, behind the waiting room). A designer who caches the seat map with a lazy TTL rebuilds the exact demoralizing-blur failure the admission-control dive exists to prevent: two hundred fans clicking a seat that sold seconds ago. The split to keep sharp: static details from cache; availability pushed, or read with TTLs measured against how fast seats actually move.
+
+### ⚙️ Booking service
+`Service` · `Python · FastAPI`
+
+The **Booking service** is the critical section of the entire platform: acquire a seat hold, take payment, confirm the order. Everything else in the design — waiting room, cache, search — exists to keep traffic *away* from this container so its short transactions stay short.
+
+**Responsibilities**
+
+- On seat selection, acquire a per-seat **TTL hold** in Redis — the checkout's admission ticket; walk-aways and crashes free themselves by expiry.
+- Take payment through the PSP, one idempotency key per checkout attempt.
+- Confirm the order in a **row-locked Postgres transaction** that re-verifies the hold, marks the seats sold, and writes the order — the final arbiter against double-sells.
+
+Three classes carry that sequence:
+
+```mermaid
+classDiagram
+    class SeatHoldService {
+        +acquire(seat, user, ttl) bool
+        +release(seat, user)
+        +holder(seat) str
+    }
+    class BookingConfirmer {
+        -use_locking: bool
+        +confirm(seat, user) Order
+    }
+    class PaymentClient {
+        +capture(amount, idempotency_key) Receipt
+    }
+    BookingConfirmer --> SeatHoldService : verify hold before confirm
+    BookingConfirmer --> PaymentClient : capture on success
+```
+
+The layering to say out loud: **Redis is the experience; Postgres is the invariant.** Holds make checkout humane; the conditional, locked confirm is what makes *"never sell a seat twice"* true even if every hold lies (`BookingConfirmer`'s `use_locking` flag exists precisely to demonstrate the difference). Each class mirrors a file in the forthcoming POC at `06-case-studies/examples/ticketmaster/app/` — click the code-level boxes for their docs.
+
+**Where it breaks.** Not by scaling: more instances just add transactions converging on the same ~50k ticket rows, which is why admission control upstream — not autoscaling here — answers the on-sale spike.
+
+### 🧩 SeatHoldService
+`Code` · `Python`
+
+**SeatHoldService** manages the checkout's admission ticket: the per-seat, per-user TTL hold in Redis.
+
+**Responsibilities**
+
+- `acquire(seat, user, ttl)`: one atomic set-if-not-exists with expiry (`SET NX PX`) — two fans racing for the same seat get exactly one winner, decided by Redis's single-threaded execution, no application-level check-then-set window.
+- `holder(seat)`: report who holds a seat, so the confirm step can verify the completing user is the one who held it.
+- `release(seat, user)`: drop the hold on success or explicit abandonment; otherwise the TTL fires and the seat frees itself.
+
+The class is small because the design pushed all the hard guarantees elsewhere. It deliberately does **not** try to be a correct distributed lock — no fencing tokens, no consensus — because the lesson's layering makes that unnecessary: the hold is the *experience* (a humane checkout where your seat won't vanish mid-payment), while the *invariant* belongs to `BookingConfirmer`'s row-locked transaction.
+
+**The invariant it protects:** at most one live holder per seat at any instant, and no hold outlives its TTL — so crashed or abandoned checkouts release inventory automatically, without a sweeper.
+
+**Where it breaks.** The lease that lies: a GC pause can leave a caller acting on a hold that already expired, and an async Redis failover can forget grants. Both degrade UX only — the conditional confirm downstream fences the consequences. Implemented in the forthcoming POC at `06-case-studies/examples/ticketmaster/app/seat_hold_service.py`.
+
+### 🧩 BookingConfirmer
+`Code` · `Python`
+
+**BookingConfirmer** is the critical section — the one place in the platform where *"never sell a seat twice"* is actually enforced.
+
+**Responsibilities**
+
+- `confirm(seat, user)`: open a short Postgres transaction, take the seat row's lock (`SELECT … FOR UPDATE`), re-verify the caller still holds the seat, transition it `available → sold` *conditionally*, write the order row, commit.
+- Trigger `PaymentClient.capture` only on a confirm that can succeed, and treat a zero-rows-matched conditional write as the rejection it is — refund path, not retry path.
+
+The conditional write is doing fencing-token work: a zombie whose Redis hold expired during a GC pause can still arrive here, but its `UPDATE … WHERE status = 'available'` matches nothing once another buyer owns the row. Storage that supports conditional atomic writes replaces fencing tokens — the compare-and-set *is* the fence.
+
+**The invariant it protects:** the row-lock transaction is the **final arbiter** — exactly one `sold` transition per seat row, no matter what any hold, cache, or delayed webhook claims. Redis losing every hold produces races and apologies, never a double-sell.
+
+**Where it breaks.** Turn the pessimism off and watch: the class carries a `use_locking` flag so the forthcoming POC (at `06-case-studies/examples/ticketmaster/app/booking_confirmer.py`) can demonstrate that without the lock, two concurrent confirms both read `available` and both sell the seat. The flag is pedagogy — the lock is not optional in production, and neither is keeping the transaction milliseconds short.
+
+### 🧩 PaymentClient
+`Code` · `Python`
+
+**PaymentClient** is the booking service's boundary with the outside world: the external payment provider, reached over a network that times out, retries, and delivers webhooks late.
+
+**Responsibilities**
+
+- `capture(amount, idempotency_key)`: authorize and capture the charge against the PSP, carrying **one idempotency key per checkout attempt** so a retried request can never become a second charge.
+- Surface the PSP's asynchronous reality to the caller: a timeout is *unknown*, not *failed* — the charge may have landed — and the webhook, not the synchronous response, is often the truth.
+
+The idempotency key is the whole design of the class. Payment calls sit on the wrong side of a network partition from your transaction: you cannot atomically *"charge the card and mark the seat sold."* What you *can* do is make the charge safely repeatable — same key, same attempt, at most one capture — and let `BookingConfirmer`'s conditional write arbitrate the seat regardless of when the payment confirmation arrives. The lesson's sequence shows the payoff: a webhook that lands *after* the hold expired meets a conditional update that matches zero rows — refund and apologize, never double-sell.
+
+**The invariant it protects:** one checkout attempt produces **at most one capture**, however many times the request is retried or the webhook redelivered.
+
+**Where it breaks.** Reusing a key across *different* attempts (new seat, new price) silently returns the old result; minting a fresh key per retry silently double-charges. Key scope is the bug surface. Stubbed in the forthcoming POC at `06-case-studies/examples/ticketmaster/app/payment_client.py`.
+
+### ⚡ Seat-hold store
+`Cache` · `Redis`
+
+The **Seat-hold store** holds one small fact per contested seat — `seat → holder`, with a TTL — and that TTL is the whole reason it exists. A hold is a **lease**, not a lock: it expires on its own, so a shopper who wanders off, a browser that crashes, or a booking server that dies mid-checkout all free the seat automatically. No sweeper job, no expired-row clutter, no correctness hostage to a scheduler.
+
+**Responsibilities**
+
+- Grant a hold atomically — set-if-not-exists with a ~10-minute TTL (`SET NX PX`) — so two fans clicking seat 22A in the same instant get exactly one winner.
+- Store the holder's identity as the value, so confirm can verify the right user is completing.
+- Expire silently; drop the key on explicit release after purchase.
+
+Why not keep holds in Postgres rows? Because on-sale **hold churn** — grab-and-abandon attempts vastly outnumbering sales — would land on the transactional tables that must stay short-transaction-fast. Churn lands on memory instead; the ticket table shrinks back to `available | sold`.
+
+**Where it breaks.** Leases lie: a GC-paused server can resume believing it still holds an expired hold (the zombie), and a Redis failover onto an async replica can forget recent grants entirely. Both are survivable *by design* — the final sale is the conditional, row-locked write in the orders DB, which insists the row still be sellable regardless of what any lease claims. Lose every hold and shoppers race, some losing at the payment page: degraded UX, **zero double-sells**. Never promote this store to arbiter.
+
+### 🗄️ Orders DB
+`Relational database` · `PostgreSQL`
+
+The **Orders DB** is the system of record and the last word on the only invariant that matters: one `sold` transition per seat, ever. Everything upstream — waiting room, holds, payment — is choreography; this container is the arbiter.
+
+**Responsibilities**
+
+- Hold the ticket-per-seat rows — the schema decision that matters most, because pre-creating a row per bookable seat is *materialized conflict*: it collapses what would be a phantom/write-skew race (guarding on the absence of rows) into an ordinary, lockable single-row conflict. Every fight has an address.
+- Execute the confirm as a short transaction with explicit pessimism: `SELECT … FOR UPDATE` on the seat rows, a conditional transition from `available` to `sold`, the order row written in the same commit.
+- Reject the loser: a racing confirm — or a zombie whose hold expired mid-GC-pause — matches zero rows, and that zero *is* the fence. Conditional atomic writes stand in for fencing tokens.
+
+The isolation stance is deliberate: **read committed plus hand-placed locks**, not `SERIALIZABLE`. Optimistic serializable control aborts and retries under contention, and an on-sale is the high-contention worst case — pessimism on exactly the contended rows pays for coordination only where the fight lives.
+
+**Where it breaks.** Long transactions. The classic trap is stretching the row lock across the five-minute human checkout — pinned connections, deadlocks, stranded locks. Locks here are for milliseconds; think-time lives in the TTL hold store. Keep confirms short and this container scales further than intuition suggests, because ~50k rows per event is small — it's *hot*, not big.
+
+</details>
 
 ## ⚖️ Trade-offs
 

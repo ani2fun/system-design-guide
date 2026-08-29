@@ -213,131 +213,113 @@ The amplification also runs *backwards*: a message to N participants generates o
 
 **One honest paragraph on end-to-end encryption.** Crypto is scoped out (exhaustive security sits below the line), so this stays at the architecture level with nothing invented: E2EE means clients encrypt message content such that servers cannot read it — and the striking fact is how little of this design that changes. Each mechanism consumed only metadata: routing needs userId and chatId; the Inbox needs recipient client and message id; ordering needs the chat's sequence number; receipts need message ids and statuses. **None of it reads content.** The chat server was already, structurally, a store-and-forward system for payloads it has no reason to open — E2EE makes that formal: content becomes an opaque blob (attachments already were — opaque URLs into blob storage). The server gives up every content-touching feature — search, content-based moderation, previews; it keeps everything in this lesson. Key exchange, group re-keying on membership change, and multi-device key state are real, hard, and outside this lesson's scope — in the interview, name that boundary rather than improvising past it.
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `whatsapp.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside a chat server. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_whatsapp_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="WhatsApp — C4 Container view (final architecture)"
-></iframe>
-
-WhatsApp again as a **D2 walkthrough** — one source, three boards. Click **WhatsApp** to drop into the containers, then **the chat servers** to reach the code level; ◀ ▶ ⌂ step back out.
-
-```d2 boards name="whatsapp" root="System Context"
+```d2 boards name="c4-whatsapp" root="System Context"
 direction: right
 
 classes: {
-  actor: {style: {fill: "#f3f4f6"; stroke: "#6b7280"}}
-  edge:  {style: {fill: "#dbeafe"; stroke: "#2563eb"}}
-  svc:   {style: {fill: "#dcfce7"; stroke: "#16a34a"}}
-  data:  {style: {fill: "#ffedd5"; stroke: "#ea580c"}}
-  async: {style: {fill: "#f3e8ff"; stroke: "#9333ea"}}
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
 }
 
-user: "User\n[Person]\npersistent connection; may be offline for days" {
+user: "User\n[Person]" {
+  class: client
   shape: person
-  class: actor
 }
 
-sys: "WhatsApp\n[Software System]\nbidirectional delivery, offline inboxes, receipts\nat billions of persistent connections" {
+sys: "WhatsApp\n[Software System]" {
   class: svc
   link: layers.container
 }
 
-blob: "Media storage\n[Object storage]\nopaque encrypted blobs; servers never see plaintext" {
-  class: data
-}
-
 user -> sys: "WebSocket: send, receive, receipts"
-user -> blob: "presigned media upload / download"
 
 layers: {
   container: {
-    direction: right
+    direction: down
 
-    user: "User" {
+    user: "User\n[Person]" {
+      class: client
       shape: person
-      class: actor
     }
 
-    lb: "L4 load balancer\n[TCP]\npass-through, so a socket stays pinned to its server" {
+    lb: "L4 load balancer\n[L4 / TCP]" {
       class: edge
     }
 
-    chat: "Chat servers\n[Python - WebSockets]\nterminate sockets; route to the recipient's socket" {
+    chat: "Chat servers\n[Python · WebSockets]" {
       class: svc
       link: _.layers.code
     }
 
-    pubsub: "Pub/sub\n[Redis pub/sub]\ncross-server delivery by recipient channel" {
+    pubsub: "Pub/sub bus\n[Redis pub/sub]" {
       class: async
+      shape: queue
     }
 
-    inbox: "Offline inbox\n[Wide-column store]\nundelivered messages drain on reconnect" {
+    inbox: "Inbox store\n[Wide-column store]" {
       class: data
       shape: cylinder
     }
 
-    blob: "Media storage\n[Object storage]" {
+    blob: "Media store\n[Object storage]" {
       class: data
       shape: cylinder
     }
 
-    user -> lb: "WebSocket"
     lb -> chat: "pinned WebSocket traffic"
-    chat -> pubsub: "publish to recipient channel" {style.stroke-dash: 3}
-    pubsub -> chat: "deliver to the socket holder" {style.stroke-dash: 3}
-    chat -> inbox: "write, then delete on ack; drain on reconnect"
-    user -> blob: "presigned upload / download"
+    chat -> pubsub: "publish to recipient channel"
+    pubsub -> chat: "deliver to the socket holder"
+    chat -> inbox: "write-then-delete-on-ack · drain on reconnect"
+    user -> blob: "presigned media upload / download"
   }
 
   code: {
-    direction: right
+    direction: down
 
-    router: "MessageRouter\nwrite to the inbox FIRST, then deliver\nlocal socket if here, else publish\nat-least-once; client dedups by message id" {
+    chat: "Chat servers\n[Python · WebSockets]" {
       class: svc
+
+      connection_registry: "ConnectionRegistry" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/04-whatsapp/domain/connection_registry.py"
+      }
+      message_router: "MessageRouter" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/04-whatsapp/domain/message_router.py"
+      }
+      receipt_tracker: "ReceiptTracker" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/04-whatsapp/domain/receipt_tracker.py"
+      }
     }
 
-    registry: "ConnectionRegistry\nthe routing table: which socket lives where\nupdated on connect / disconnect" {
-      class: svc
-    }
-
-    receipts: "ReceiptTracker\ndrives sent to delivered to read\nreceipts are tiny messages flowing back" {
-      class: svc
-    }
-
-    pubsub: "Pub/sub\n[Redis]" {
+    pubsub: "Pub/sub bus\n[Redis pub/sub]" {
       class: async
+      shape: queue
     }
 
-    inbox: "Offline inbox\n[Wide-column store]" {
+    inbox: "Inbox store\n[Wide-column store]" {
       class: data
       shape: cylinder
     }
 
-    router -> registry: "where is the recipient?"
-    receipts -> router: "receipt = reverse message"
-    router -> pubsub: "publish(recipient)" {style.stroke-dash: 3}
-    router -> inbox: "write first, delete on ack"
+    chat.message_router -> chat.connection_registry: "where is the recipient?"
+    chat.receipt_tracker -> chat.message_router: "receipt = reverse message"
+    pubsub -> chat: "deliver to the socket holder"
+    chat.message_router -> pubsub: "publish(recipient)"
+    chat.message_router -> inbox: "write first (delete on ack)"
   }
 }
 ```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside a chat server (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_whatsapp_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="WhatsApp — C4 code level (inside a chat server)"
-></iframe>
 
 A **runnable implementation** lives at `_proof-of-concepts/07-case-studies/04-whatsapp/` in the repo root — **two** FastAPI WebSocket chat servers over one Redis, with the three classes above (`ConnectionRegistry`, `MessageRouter`, `ReceiptTracker`) mirroring the code view 1:1.
 
@@ -351,6 +333,193 @@ cd _proof-of-concepts/07-case-studies/04-whatsapp
 `./run test` proves the two hard parts over real WebSockets: `alice` on **chat1** messages `bob` on **chat2** — chat1 can't see bob's socket, so it looks him up in the presence store and publishes to chat2's channel, whose subscriber delivers it (and a **delivered** receipt routes back the same way); and a message sent to an *offline* `carol` is written to her inbox and **drained onto her socket when she reconnects**. Message-first-to-inbox, delete-on-ack is what makes delivery survive a missing socket.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>10 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 User
+`Actor` · `Human · WebSocket`
+
+The **User** breaks the pattern of every previous case study: they are not a request-maker but a **conversation partner** — they receive as much as they send, and the thing they receive was never asked for. HTTP has no verb for that, which is why this actor connects over a persistent WebSocket instead of firing stateless requests.
+
+**Responsibilities**
+
+- Hold one long-lived `wss://` connection per *device* — one user may be a phone, a tablet, and a laptop, each with its own socket and its own delivery state.
+- Send messages with a **client-generated message id**, so a retry after a timeout is recognized as a duplicate, not a second message.
+- **Ack every push** at the application level — the ack, not the TCP write, is what *"delivered"* means — and dedup redelivered ids on receipt.
+- Upload and download media directly against blob storage via presigned URLs; the chat servers never touch the bytes.
+
+The defining property of this actor: **they may be offline for days.** The whole Inbox tier exists because a message sent to a powered-off phone must survive until that phone returns.
+
+**Where it breaks.** Users are the reason delivery is at-least-once rather than exactly-once at the transport: their networks die mid-ack, their apps crash after receiving, their clocks can't be trusted for ordering. The design answers each at the edge — idempotent receive, Inbox redelivery, server-assigned sequence numbers — rather than pretending the actor is reliable.
+
+### 🏢 WhatsApp
+`System` · `Persistent connections · store-and-forward`
+
+**WhatsApp** is a realtime messaging system: bidirectional delivery, offline inboxes, and receipts, at billions of persistent connections. Structurally it is a **store-and-forward system for payloads it has no reason to open** — every mechanism inside consumes only metadata (userIds, chatIds, message ids, sequence numbers), which is why end-to-end encryption changes almost nothing about this architecture.
+
+**Responsibilities**
+
+- Deliver a message to its recipient within ~500 ms when both parties are online — by *pushing* down an open socket, because polling at that grain is ruinously wasteful.
+- Hold undelivered messages durably (up to 30 days) for recipients who are offline, and drain them on reconnect.
+- Drive the sent → delivered → read receipt ladder, each tick pinned to a machine-checkable event.
+- Move media as opaque encrypted blobs, out-of-band of the message path.
+
+The decisive design fact: choosing WebSockets makes the connection **state**. A stateless HTTP fleet routes any request anywhere; a socket fleet cannot — the message for Bob must reach the specific machine holding Bob's socket. Everything interesting in the container view (the L4 balancer, the pub/sub bus, the Inbox) is a consequence of that one decision.
+
+**Where it grows.** Durability and speed are bought separately: the Inbox transaction makes *"sent"* true, the lossy pub/sub hop makes delivery fast, and the client's ack-plus-dedup turns at-least-once transport into effectively-once conversation. Group fan-out stays tractable only because group size is capped at 100 — a product decision doing structural work.
+
+### 🛃 L4 load balancer
+`Load balancer` · `L4 / TCP`
+
+The **L4 load balancer** is the front door for every persistent connection — and the notable thing about it is what it *doesn't* do. It operates at layer 4, raw TCP pass-through, not layer 7.
+
+**Responsibilities**
+
+- Pick a chat server **once, at connect time**, for each incoming `wss://` connection.
+- Then get out of the byte stream's way: the WebSocket, once established, stays pinned to its chat server for the connection's whole life.
+
+Why L4 and not L7: an L7 balancer parses and re-routes individual HTTP requests, which is exactly the wrong shape for a WebSocket — there are no individual requests to route, just one long-lived TCP connection carrying frames in both directions. Terminating and re-balancing mid-stream would sever the very thing the design depends on: a stable server-side endpoint where the recipient's socket can be found. The balancer's job here is placement, not routing.
+
+One consequence worth saying out loud: this balancer does **not** solve message routing. It decides where *connections* live and gives senders no way to reach the server holding the *recipient's* connection — that's rung 1 of the lesson's routing ladder, broken outright, and the reason the pub/sub bus exists.
+
+**Where it breaks.** Correlated reconnection. When a chat server dies (or a deploy drains one), millions of orphaned sockets redial through this tier at once, each paying the expensive path: TLS handshake, subscribe, Inbox drain. The balancer must spread that herd, not amplify it.
+
+### ⚙️ Chat servers
+`Service` · `Python · WebSockets`
+
+The **Chat servers** terminate every persistent WebSocket and do the design's defining work: get each message to the recipient's socket, *wherever that socket lives*. Each server keeps an in-memory map `userId → connection` for the sockets it holds; historically WhatsApp ran 1–2 million connections per host on a purpose-built Erlang system, so even at that ceiling this is a fleet of hundreds, never one machine.
+
+**Responsibilities**
+
+- Accept `sendMessage`, commit the Message + per-recipient-client Inbox rows in one transaction, and only then ack the sender — *"sent"* *means* that commit.
+- Deliver: push to a local socket if the recipient is here, publish to the recipient's channel otherwise, and let the Inbox row carry messages nobody can receive right now.
+- On a client's application-level ack, delete its Inbox row and flow the receipt back to the sender.
+
+Three classes carry that flow — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class ConnectionRegistry {
+        +register(user_id, socket)
+        +unregister(user_id)
+        +locate(user_id) Socket
+    }
+    class MessageRouter {
+        +route(msg)
+    }
+    class ReceiptTracker {
+        +on_sent(message_id)
+        +on_delivered(message_id)
+        +on_read(message_id)
+    }
+    MessageRouter --> ConnectionRegistry : where is the recipient?
+    ReceiptTracker --> MessageRouter : receipt = reverse message
+    note for MessageRouter "route(): local socket if the recipient is here ·\npublish to the recipient's channel if elsewhere ·\nInbox is the surviving copy when nobody holds a socket"
+```
+
+Each class maps to a file in the POC at `06-case-studies/examples/whatsapp/app/` (deferred to the project's hands-on phase) — click the code-level boxes for their docs.
+
+**Where it breaks.** Not on steady-state throughput — on **correlated reconnection**: one server dying orphans millions of sockets that redial at once, each paying TLS handshake + subscribe + Inbox drain. Deploys trigger this deliberately, so draining a chat server is an operational discipline, not an accident.
+
+### 🧩 ConnectionRegistry
+`Code` · `Python`
+
+**ConnectionRegistry** is the routing table: which user's socket lives on which chat server *right now*. It is the in-memory `userId → connection` map every chat server keeps for its own sockets, paired with the subscription side-effect that makes cross-server lookup work — registering a user here is also what subscribes this server to that user's pub/sub topic.
+
+**Responsibilities**
+
+- `register(user_id, socket)`: record the mapping when a connection lands, and subscribe to the user's channel so remote publishes reach this server.
+- `unregister(user_id)`: drop the mapping and the subscription on disconnect.
+- `locate(user_id)`: the lookup **every delivery starts with** — return the local socket if this server holds the recipient, or nothing, telling the router to go remote.
+
+**The invariant it maintains:** the registry is consulted before every delivery, and its state is updated purely as a side effect of connect/disconnect — nobody ever computes or assigns placement. That is rung 4 of the lesson's routing ladder: the subscription *is* the registry, which is why scaling the fleet is not a re-hashing event.
+
+**Where it breaks.** The map is deliberately volatile — a server crash forgets every socket it held, and that's safe only because durability lives in the Inbox, not here. The hazard is the gap: between a disconnect and the reconnect's `register`, publishes to that user hit no subscriber and vanish from the pub/sub layer, caught later by the Inbox drain. Lands in the forthcoming POC at `06-case-studies/examples/whatsapp/app/connection_registry.py`.
+
+### 🧩 MessageRouter
+`Code` · `Python`
+
+**MessageRouter** owns `route(msg)` — the decision at the heart of the chat server. Three paths, tried in order of cheapness:
+
+**Responsibilities**
+
+- **Local:** ask `ConnectionRegistry.locate()` — if the recipient's socket is on *this* server, push `newMessage` straight down it.
+- **Remote:** otherwise publish to the recipient's channel; whichever chat server holds the socket is subscribed and delivers.
+- **Nobody:** when no server holds a socket, the message rests in the recipient's Inbox row — already committed before any delivery was attempted — and waits for reconnect.
+
+**The invariant it maintains:** delivery is **at-least-once, never at-most-once.** The router may push a message twice (a crash between the push and the Inbox delete forces a replay — a missing ack *must* trigger redelivery, or crashes lose messages), but it may never silently drop one, because the durable Inbox write precedes every delivery attempt. The duplicate dies at the client: every message carries a unique id, and a redelivered id is acked but not rendered. At-least-once transport plus that idempotent receive composes into what the lesson calls **effectively-once** — the *effect* lands once even when processing repeats. The router does not try to be smarter than that; exactly-once transport is not on the menu.
+
+**Where it breaks.** Group fan-out multiplies it: one message to a 100-person group is up to ~99 publishes and ~300 Inbox rows, all downstream of one `route()` call — the product's group-size cap is what keeps this loop bounded. Lands in the forthcoming POC at `06-case-studies/examples/whatsapp/app/message_router.py`.
+
+### 🧩 ReceiptTracker
+`Code` · `Python`
+
+**ReceiptTracker** drives the sent → delivered → read ladder — and its whole design insight is that it contains almost no machinery of its own. **A receipt is just a tiny message flowing the other way:** to tell Alice her message was delivered, publish a `receiptUpdate` to *Alice's* channel and let the same `MessageRouter` paths carry it. No second delivery system, no separate receipt pipeline.
+
+**Responsibilities**
+
+- `on_sent(message_id)`: fire the single tick when the Message + Inbox transaction commits — *"sent"* means *the system can no longer lose it*, not *"the recipient has it"*.
+- `on_delivered(message_id)`: fire the double tick when the recipient client's **application-level ack** arrives — only that, because TCP buffering the bytes proves nothing about the app having them.
+- `on_read(message_id)`: the same machinery one level up — the client emits a read event when the message renders, and the same reverse-message pipe carries a different verb.
+
+**The invariant it maintains:** every tick is pinned to a **machine-checkable event** — a transaction commit, an application ack, a render event. No receipt is ever inferred from a lower layer's success.
+
+**Where it grows.** The fan-out runs backwards: a message to N group participants generates on the order of N delivered and N read receipts converging on the sender — real messengers batch or throttle that fan-in. In a group, *"delivered"* is a *set* of per-participant, per-device facts aggregated in the sender's UI, not one boolean. Lands in the forthcoming POC at `06-case-studies/examples/whatsapp/app/receipt_tracker.py`.
+
+### 🚌 Pub/sub bus
+`Event bus` · `Redis pub/sub`
+
+The **Pub/sub bus** answers the question the socket fleet can't: *which chat server holds Bob's connection right now?* Its trick is that nobody ever computes the answer — **the subscription itself is the registry.** When Bob's socket lands on server B, B subscribes to the topic `bob`; when any server accepts a message for Bob, it publishes to `bob`; Redis forwards to whoever is subscribed. Placement stays free, and scaling the fleet stops being a re-hashing event.
+
+**Responsibilities**
+
+- Keep a lightweight in-memory map from per-user topic to subscribed chat servers, updated as a side effect of connect/disconnect.
+- Forward each published message to the subscribers of the recipient's topic — an extra single-digit-millisecond hop on the delivery path.
+
+The lesson earns this rung by rejecting two others: a Kafka topic per user drowns in per-topic overhead (~50 KB × billions of users, and log brokers shard few-huge topics, not billions of tiny ones), and consistent hashing works but makes every fleet resize a delicate user-migration event.
+
+The catch is printed on the tin: Redis Pub/Sub is **at-most-once**. No subscriber at publish time — recipient offline, server mid-restart — and the message is simply gone *from this layer*. That's fine, because durability never lived here: the Inbox row committed before the publish, and reconnect drains it. Buy the cheap lossy thing for the hot path; pay for durability exactly once, in storage.
+
+**Where it breaks.** The all-to-all connection mesh doesn't disappear — it moves to chat-servers↔Redis-nodes. And any transient gap between a publish and a subscribe drops the push silently, which is why a periodic Inbox sweep backstops this bus.
+
+### 🧱 Inbox store
+`Wide-column store` · `Wide-column store`
+
+The **Inbox store** is where durability lives — the only place in the design that promises a message won't be lost. It is a per-*client* durable message queue: one row per undelivered message per recipient device, written inside the send transaction (that commit is what the sender's *"sent"* tick means), and **deleted the moment the device acks**.
+
+**Responsibilities**
+
+- Hold one Inbox row per recipient *client* — per device, not per user, because your phone acking a message says nothing about the laptop asleep in a bag.
+- Survive the recipient being offline for days; on reconnect, the client drains its rows as replayed `newMessage` pushes, each deleted on ack.
+- Age out anything unacked after 30 days via a sweep job.
+
+Why drain-and-delete: this is the classic message-broker model — hold until acknowledged, delete on ack, deliberately unsuitable for long-term storage. Here that *"unsuitability"* is the *requirement*, achieved for free: the server holds a message exactly as long as necessary and not a moment longer. Delivery **is** deletion — the retention rule and the delivery mechanism are one thing seen from two sides.
+
+The delete-on-ack loop is also the exactly-once construction's second half: a crash between push and delete means the row survives and the message replays — a missing ack *must* trigger redelivery, or crashes lose messages — and the client's dedup-by-message-id absorbs the duplicate.
+
+**Where it grows.** Linearly with group fan-out: one message to a full 100-person group writes up to ~300 rows (99 recipients × ~3 devices) inside one transaction. The 100-member cap is what keeps that write amplification — and the transaction's failure surface — bounded.
+
+### 🪣 Media store
+`Object storage` · `Object storage`
+
+The **Media store** holds attachments as **opaque encrypted blobs** — and its defining architectural property is that the chat servers never touch the bytes. Media rides a different road from messages entirely.
+
+**Responsibilities**
+
+- Issue-side: the client asks the chat server for a presigned upload URL (`getAttachmentTarget`) and uploads the blob **directly** here; the resulting opaque URL travels as ordinary message content.
+- Serve downloads to recipients via presigned GETs.
+- Expire blobs on a 30-day TTL, matching the Inbox's retention rule.
+
+Why opaque blobs: end-to-end encryption means clients encrypt content such that servers *cannot* read it — and attachments were already structurally there before any crypto, since the message path only ever carried a URL. E2EE just makes formal what the architecture already implied: the server is a store-and-forward system for payloads it has no reason to open. Every mechanism in the design — routing, Inbox, ordering, receipts — consumes only metadata; none of it reads content, which is why this container can hold ciphertext without anything else changing.
+
+Notably absent: a CDN. With at most 100 recipients per attachment, cache hit rates don't justify one — the exact inverse of the URL shortener's 1000:1 read skew, where caching was the whole game.
+
+**Where it grows.** Media dominates the byte budget while messages dominate the operation budget — text messages are tiny and hot, blobs are large and touched a bounded number of times. Keeping the two on separate paths is what lets each tier be sized for its own shape.
+
+</details>
 
 ## ⚖️ Trade-offs
 

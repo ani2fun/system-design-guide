@@ -236,29 +236,139 @@ Now scale it. 100M watches/day against 1M uploads/day is the read asymmetry, and
 
 The [CDN](/synapse/system-design-from-first-principles/building-blocks/cdn-and-edge) is the answer, and the honest framing is that the CDN is the actual video server — cache both segments *and* manifests at edge nodes near viewers. For a hot video the entire watch session — manifest fetches, every segment at every quality — is served edge-local, and *our* system sees exactly one request: the metadata lookup. The origin's residual duties: cache fills, the metadata/URL path, and the long tail too cold to be cached anywhere. That's the read:write asymmetry resolved by placement — writes and processing land on infrastructure we run; reads, 99%+ of all traffic, land on infrastructure whose entire job is being near users. (What the CDN bills for this is the cost story's other half — see Numbers.)
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `youtube.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the transcoding pipeline. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_youtube_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="YouTube — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-youtube" root="System Context"
+direction: right
+
+classes: {
+  async:  { style: { fill: "#f3e8ff"; stroke: "#9333ea"; font-color: "#581c87" } }
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+user: "Creator / Viewer\n[Person]" {
+  class: client
+  shape: person
+}
+
+sys: "YouTube\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+user -> sys: "upload · browse · watch"
+
+layers: {
+  container: {
+    direction: down
+
+    user: "Creator / Viewer\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    api: "Upload & metadata API\n[Python · FastAPI]" {
+      class: svc
+    }
+
+    raw: "Raw upload store\n[S3-style object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    queue: "Transcode task queue\n[Queue]" {
+      class: async
+      shape: queue
+    }
+
+    pipeline: "Transcoding pipeline\n[Python workers]" {
+      class: svc
+      link: _.layers.code
+    }
+
+    renditions: "Rendition store\n[S3-style object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    meta: "Video metadata DB\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    cdn: "CDN\n[CDN]" {
+      class: edge
+    }
+
+    api -> raw: "mint resumable presigned uploads"
+    api -> meta: "video state · watch metadata"
+    raw -> queue: "upload-complete event"
+    queue -> pipeline: "deliver transcode work"
+    pipeline -> raw: "read original segments"
+    pipeline -> renditions: "write renditions + manifests"
+    pipeline -> meta: "flip state → live"
+    cdn -> renditions: "fill on miss"
+    user -> raw: "chunked presigned PUT (direct)"
+    user -> cdn: "manifests + segments (adaptive playback)"
+  }
+
+  code: {
+    direction: down
+
+    pipeline: "Transcoding pipeline\n[Python workers]" {
+      class: svc
+
+      dag_orchestrator: "DagOrchestrator" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/06-youtube/pipeline/dag_orchestrator.py"
+      }
+      segment_transcoder: "SegmentTranscoder" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/06-youtube/pipeline/segment_transcoder.py"
+      }
+      manifest_assembler: "ManifestAssembler" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/06-youtube/pipeline/manifest_assembler.py"
+      }
+    }
+
+    queue: "Transcode task queue\n[Queue]" {
+      class: async
+      shape: queue
+    }
+
+    raw: "Raw upload store\n[S3-style object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    renditions: "Rendition store\n[S3-style object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    meta: "Video metadata DB\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    pipeline.dag_orchestrator -> pipeline.segment_transcoder: "schedule segment×rendition tasks"
+    pipeline.dag_orchestrator -> pipeline.manifest_assembler: "all done → assemble"
+    raw -> queue: "upload-complete event"
+    queue -> pipeline: "deliver transcode work"
+    pipeline -> raw: "read original segments"
+    pipeline.segment_transcoder -> renditions: "content-addressed writes"
+    pipeline.manifest_assembler -> meta: "video → live"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the transcoding pipeline (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_youtube_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="YouTube — C4 code level (inside the transcoding pipeline)"
-></iframe>
 
 A **runnable implementation** of the transcoding pipeline lives at `_proof-of-concepts/07-case-studies/06-youtube/` in the repo root — the three classes above (`DagOrchestrator`, `SegmentTranscoder`, `ManifestAssembler`) mirroring the code view, over Redis.
 
@@ -272,6 +382,221 @@ cd _proof-of-concepts/07-case-studies/06-youtube
 `./run test` exercises the DAG: a 3-segment × 3-rendition video fans out to **9 tasks**, fans in to **3 adaptive manifests**, and flips to **live**; a completed video re-processes as a no-op (content-addressed output ⇒ idempotent); and injecting one failed task stops the DAG at **8/9 processing**, after which a re-run transcodes *only* the missing task and goes live — retry at task granularity, never redoing finished work.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>12 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Creator / Viewer
+`Actor` · `Human · any device, any network`
+
+One identity, two wildly asymmetric roles. As **creator**, this actor hands the system its hardest write: a video of up to tens of GBs, uploaded over a residential uplink where the transfer is measured in **hours** — laptop lids close, Wi-Fi roams, phones change towers. As **viewer**, the same actor expects playback to start in under a second and to survive a train tunnel, on whatever codec their device happens to decode and whatever bandwidth their network happens to sustain. At 1M uploads against 100M watches per day, the viewer role outnumbers the creator 100:1 before you even count segments.
+
+**Responsibilities**
+
+- Upload originals in fingerprinted 5–10 MB chunks over presigned PUTs, **directly to the raw store** — video bytes never route through the API tier.
+- Crash and re-ask as the normal upload loop: fetch the chunk manifest, skip what storage already confirmed, resume.
+- Watch adaptively: the *player* is the smart party — it fetches metadata from the API, manifests and segments from the CDN, and picks a rendition per measured throughput, switching quality at segment boundaries with no server involved in the decision.
+
+**Where it breaks.** This actor defeats every assumption of a stable connection — mid-upload interruption is the expected path, and viewer bandwidth swings by an order of magnitude mid-video. The design answers with resumable chunked ingest on the write side and client-steered adaptive bitrate on the read side, engineering around the actor rather than constraining them.
+
+### 🏢 YouTube
+`System` · `Upload → process → serve · CDN-fronted`
+
+**YouTube** is a video platform whose defining property is that *the thing you store is not the thing you serve*. It receives **one** original file and serves **hundreds** of derived files — segments, renditions, manifests — manufactured by a transcoding pipeline that sits between upload and playback and is by far the most computationally expensive thing in the design. Upload, process, serve: three stages, three scales, three bottlenecks.
+
+**Responsibilities**
+
+- Ingest tens-of-GB originals resumably, with bytes flowing **direct to blob storage** over presigned URLs — the API tier coordinates and exits the byte path.
+- Manufacture the derived catalog: split each original into few-seconds segments, transcode each across a (resolution × codec) ladder in a parallel DAG, and assemble adaptive manifests when every piece lands.
+- Serve watches from the **CDN**, not the origin — manifests and segments cached at the edge, quality chosen by the player.
+
+The decisive fact is the read:write asymmetry: 100M watches against 1M uploads per day is 100:1 on whole videos, and orders of magnitude worse byte-for-byte, since one watch streams hundreds of segment files. Whatever else is true, the watch path must be absorbed by infrastructure that never touches this system's compute.
+
+**Where it grows.** Each plane on its own terms: ingest rides blob-storage capacity, the pipeline scales elastically on queue depth (and runs happily on preemptible instances, because its tasks are safely re-runnable), and the watch path grows with CDN edge capacity — the origin sees roughly one metadata request per watch session.
+
+### ⚙️ Upload & metadata API
+`Service` · `Python · FastAPI`
+
+The **Upload & metadata API** is the container defined by what it *doesn't* do: video bytes never pass through it, in either direction. A tens-of-GB upload routed through app servers would put compute in the byte path — the exact mistake the Dropbox case study spent a lesson dismantling — so this API deals only in **credentials and facts**. On upload it mints resumable presigned URLs against the raw store; on watch it returns VideoMetadata, whose one load-bearing field is the primary-manifest URL the player takes to the CDN.
+
+**Responsibilities**
+
+- `POST /videos/presigned-url` — register the video (row created, status `uploading`), return per-chunk presigned PUTs; resume by returning only the chunks storage hasn't confirmed.
+- `GET /videos/{videoId}` — return the metadata record, including the manifest URL once the pipeline has flipped the video live.
+- Own the video state machine rows in the metadata DB; never own a byte of video.
+
+The payoff is scale-shaped: this container is stateless, so it scales horizontally without ceremony — and it can afford to, because it sees roughly **one metadata request per watch session**. The tonnage — manifests, segments, every quality of every video — lands on the CDN and never touches it.
+
+**Where it breaks.** On scope creep: any design that lets this API proxy uploads *"for validation"* or pick renditions *"for the client"* has re-inserted compute into the byte path and broken CDN cacheability. Its discipline — credentials out, facts out, bytes never — is the whole design's discipline.
+
+### 🪣 Raw upload store
+`Object storage` · `S3-style object store`
+
+The **Raw upload store** holds the original files exactly as uploaded — and that's *all* it holds. Its objects are the pipeline's input, never the viewer's download: after processing completes, the original is never served again. Uploaders write to it **directly**, over presigned chunked PUTs minted by the API, because a tens-of-GB file has no business traversing an app server that adds nothing to the transfer.
+
+**Responsibilities**
+
+- Accept fingerprinted 5–10 MB chunks over presigned PUTs, direct from the client.
+- Act as the **witness** for upload progress: storage event notifications — not client claims — mark chunks uploaded, which is what makes resume trustworthy.
+- Emit the `upload complete` event that kicks the transcode queue — the boundary where the synchronous upload world hands off to the asynchronous processing world.
+- Retain originals after processing, as the pipeline's re-input.
+
+That retention is the quiet strategic decision. Because the original survives, every rendition downstream is **derived data** — regenerable at any time. When a better codec arrives or a transcoder bug is found, the fix is a re-encode campaign: re-run the pipeline over the back catalog as a batch job. No original, no campaign; you'd be doing surgery on damaged state instead.
+
+**Where it grows.** Write-mostly and cold: it absorbs the upload firehose (~1M videos/day at up to tens of GBs each) and is thereafter read only by transcode workers. Capacity is the easy dimension — object stores are built for exactly this shape.
+
+### 📮 Transcode task queue
+`Message queue` · `Queue`
+
+The **Transcode task queue** is the async boundary between two things that move at incompatible rhythms: uploads, which arrive in bursts on the users' schedule, and transcode capacity, which is finite and on ours. It carries the `upload complete` events that start each video's DAG and the per-segment transcode tasks the orchestrator fans out — hundreds per video across the worker fleet.
+
+**Responsibilities**
+
+- Absorb upload bursts so the pipeline never has to be provisioned for peak ingest.
+- Deliver transcode work to whichever worker is free — the decoupling that lets the fleet be elastic (and cheaply preemptible, since tasks are safely re-runnable).
+- Serve as the **autoscaling signal**: queue depth grows, fleet grows.
+- Bound retries: a video that crashes its worker will crash the retry too, so attempts are capped and the job shunts to a dead-letter path — one poison file must not become a fleet-wide grinder.
+
+Operationally, the backlog *is* the health metric — but depth alone lies. The SLO the queue silently eats is **time-to-ready** (upload complete → video watchable): a pipeline that's *"up"* but hours behind is down as far as uploaders are concerned. Watch the age of the oldest unprocessed job, not just how many there are.
+
+**Where it breaks.** On invisibility: nothing user-facing errors when the queue backs up — videos just stay `processing` longer and longer. The failure mode isn't a page, it's a slow drift, which is exactly why the oldest-job-age metric exists.
+
+### 🛠️ Transcoding pipeline
+`Worker` · `Python workers`
+
+The **Transcoding pipeline** is the manufacturing floor between upload and playback: it takes one original file and produces the hundreds of derived files watching actually requires. The work forms a **DAG** — split the original into few-seconds segments, transcode each segment across the (resolution × codec) ladder in parallel (the fan-out), assemble manifests when every piece lands (the fan-in) — because each step has explicit inputs and outputs and segment-level work has no cross-segment dependencies, so the expensive middle parallelizes across as many workers as you can buy.
+
+**Responsibilities**
+
+- Expand each upload-complete event into segment×rendition tasks and drive them to completion.
+- Read only the raw store; write only content-addressed artifacts to the rendition store; hand intermediate data between stages through blob storage, never worker memory.
+- Retry failures at **task granularity**: a dead task's partial output is discarded and the task rescheduled elsewhere — no cross-task state to repair, no whole-job rerun for one lost segment. Content-addressed outputs make the re-run a safe overwrite, which is what lets the fleet ride cheap preemptible instances.
+- Flip the video live in the metadata DB — only after the fan-in confirms every artifact.
+
+Three classes carry that flow — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class DagOrchestrator {
+        +expand(video) list~Task~
+        +on_task_done(task)
+        +retry(task)
+    }
+    class SegmentTranscoder {
+        +transcode(segment, rendition) ChunkRef
+    }
+    class ManifestAssembler {
+        +assemble(video) Manifest
+    }
+    DagOrchestrator --> SegmentTranscoder : schedule segment×rendition tasks
+    DagOrchestrator --> ManifestAssembler : all done → assemble
+    note for DagOrchestrator "retries at task granularity ·\nre-invocation safe: outputs are\ncontent-addressed, partials discardable"
+    note for ManifestAssembler "assemble() is the fan-in barrier:\nruns only when every segment×rendition\nexists · then flips video → live"
+```
+
+Each class maps to a file in the POC at `06-case-studies/examples/youtube/pipeline/` (deferred to the project's hands-on phase) — click the code-level boxes for their docs.
+
+**Where it breaks.** On poison inputs: a malformed upload crashes its worker on every retry, so attempts are capped and the job dead-letters — cheap, because everything here is discardable derived data. And on backlog: the pipeline's real SLO is time-to-ready, eaten silently as the queue ages.
+
+### 🧩 DagOrchestrator
+`Code` · `Python`
+
+**DagOrchestrator** holds the shape of the work. `expand(video)` turns one upload-complete event into the full task list — split, then one transcode task per segment×rendition pair, then assembly gated behind all of them — and `on_task_done(task)` advances the DAG, dispatching tasks the moment their dependencies clear and calling for assembly when the last transcode reports.
+
+**Responsibilities**
+
+- Expand a video into its segment×rendition task matrix and track DAG state.
+- Dispatch a task only when every input-producing task has succeeded — the workflow-scheduler dependency rule.
+- Detect dead tasks (worker crash, preemption) and `retry(task)` — at **task** granularity, never restarting the whole video's job for one lost segment.
+
+**The invariant it protects: re-invocation is safe at task granularity.** The orchestrator *will* run tasks more than once — a preempted worker may have written half its output, or all of it, dying before it reported — and it makes no attempt to prevent that. It doesn't have to: every task reads immutable input and writes content-addressed output, so a duplicate execution converges on identical bytes at identical keys. The orchestrator's bookkeeping therefore needs only at-least-once accuracy, which is a radically easier contract than exactly-once dispatch.
+
+In a real system you'd *buy* this class, not build it — Temporal-style orchestrators and the Airflow-lineage schedulers are the category — but knowing what it must do (hold the DAG, gate on dependencies, detect the dead, retry with the idempotence argument) is the interview substance.
+
+**Where it breaks.** Poison videos: a task that crashes every retry must hit a capped-attempts dead-letter path, or one malformed file grinds the fleet. Lands in the forthcoming POC at `06-case-studies/examples/youtube/pipeline/dag_orchestrator.py`.
+
+### 🧩 SegmentTranscoder
+`Code` · `Python`
+
+**SegmentTranscoder** is the unit of parallelism: `transcode(segment, rendition)` converts exactly ONE source segment into exactly ONE rung of the (resolution × codec) ladder and returns the `ChunkRef` of the written artifact. Hundreds of these run per video — the DAG's fan-out — and the class is deliberately kept this small because independence is what makes the fan-out safe: no cross-segment state, no cross-rendition state, nothing shared to repair when one dies.
+
+**Responsibilities**
+
+- Read one source segment from the raw store (read-only, immutable input).
+- Transcode it to one target rendition.
+- Write the result to the rendition store at a **content-addressed** key — a pure function of (video, segment, rendition), or of the source segment's hash plus the transcode recipe.
+
+**The invariant it protects: content-addressed output ⇒ idempotent execution.** Run this task twice — because a retry raced a slow worker, or a preempted instance had finished writing before it died unreported — and the second run regenerates a byte-identical artifact at the same key: a harmless overwrite or no-op. That single property is what the whole pipeline's fault-tolerance leans on: the orchestrator can blindly retry, bookkeeping can be merely at-least-once, downstream manifests see byte-stable keys that never churn, and the fleet can run on cheap spot instances that get killed more often than hardware actually fails.
+
+**Where it breaks.** Malformed input: a corrupt container or pathological codec parameters crash this class on every attempt, so the retry cap and dead-letter verdict live above it — cheap to invoke, since its partial outputs are discardable derived data. Lands in the forthcoming POC at `06-case-studies/examples/youtube/pipeline/segment_transcoder.py`.
+
+### 🧩 ManifestAssembler
+`Code` · `Python`
+
+**ManifestAssembler** is the fan-in. `assemble(video)` runs exactly once per video, and only when the DAG's barrier clears: every rendition of every segment confirmed present in the rendition store. It then writes the per-rendition media manifests (segment URLs in playback order), writes the primary manifest listing the renditions, records the manifest URL in VideoMetadata, and flips the video's status to **live** — the single visibility point at which the video starts existing for viewers.
+
+**Responsibilities**
+
+- Enforce the **barrier**: assembly's inputs are *every* segment×rendition artifact, so it must not start while any transcode task is unfinished — the workflow-scheduler rule that a consumer runs only after all its producers succeed.
+- Write media manifests + primary manifest to the rendition store.
+- Flip `processing → live` in the metadata DB, atomically with recording the manifest URL.
+
+**The invariant it protects: visibility flips once, after everything, in one place.** Run the barrier sloppily — assemble after *"most"* tasks — and the manifest references segments that don't exist yet: players fetch it from the CDN, request the missing segment, and buffer or error mid-video, and the CDN may even cache the 404. A premature manifest is a *visibility* bug, not just a pipeline bug. This is the Dropbox manifest-commit discipline one stage longer: derived data becomes visible in exactly one place, only after every constituent artifact is confirmed durable — and recovery stays clean, because a missing artifact means re-running one idempotent task, never retracting anything published.
+
+**Where it breaks.** On its own gate: the barrier is only as trustworthy as the orchestrator's completion tracking, which is why completion means *"artifact confirmed in the store,"* not *"worker said so."* Lands in the forthcoming POC at `06-case-studies/examples/youtube/pipeline/manifest_assembler.py`.
+
+### 🪣 Rendition store
+`Object storage` · `S3-style object store`
+
+The **Rendition store** holds the product: every transcoded segment of every video at every (resolution × codec) rung of the ladder, plus the manifests that index them. It is the **CDN's origin** — the only consumer of these objects at watch time is an edge node filling a cache miss.
+
+**Responsibilities**
+
+- Store transcoded segments keyed **content-addressed**: each object's key is a pure function of its inputs — (video, segment, rendition), or a hash of the source segment plus the transcode recipe.
+- Store the manifests the assembler writes: per-rendition media manifests listing segment URLs in playback order, and the primary manifest listing the renditions.
+- Serve CDN fills on miss; serve the cold long tail nothing bothers to cache.
+
+Content addressing is what makes the whole pipeline's fault-tolerance story work. A retried transcode task regenerates a **byte-identical artifact at the same key**, so re-execution is a safe overwrite or no-op — the orchestrator's bookkeeping only needs at-least-once accuracy, because this store converges regardless. And byte-stable keys mean re-processed segments don't churn the manifests that reference them.
+
+Everything here is **derived data**: regenerable from the raw store at any time, which is why a corrupted or buggy rendition is fixed by re-running a task, never by repair.
+
+**Where it grows.** The multiplier is per codec family, not per resolution: a full H.264 ladder costs roughly 2× its own top rendition (bitrates halve down the ladder), but adding VP9/AV1 roughly doubles stored bytes again — *"just add AV1"* is a storage and re-encode-campaign decision, not a config change.
+
+### 🗄️ Video metadata DB
+`Relational database` · `PostgreSQL`
+
+The **Video metadata DB** holds the facts *about* videos while the object stores hold the bytes: uploader, title, the upload-chunk manifest while ingest is in flight, the rendition inventory once processing lands, and — above all — the video **state machine**: `uploading → processing → live`. That last field is the design's visibility switch: a video exists to viewers exactly when this row says so, and only the pipeline's fan-in step is allowed to flip it.
+
+**Responsibilities**
+
+- Own the state machine and the timestamped edges between its states — storage events flip `uploading → processing`; the manifest assembler flips `processing → live`.
+- Serve the watch path's single origin-side read: point lookup by `videoId`, returning metadata plus the primary-manifest URL.
+- Track the rendition inventory the assembler records.
+
+The access pattern is kind: ~1M uploads/day is ~365M rows/year, every query is a point lookup by `videoId`, and nothing spans videos — so the data partitions horizontally on `videoId` with no relational tension (the POC-scale model runs a single PostgreSQL; the lesson's scaling pass reasons toward a partitioned store for exactly this shape).
+
+**Where it breaks.** The **hot row**. Partitioning by `videoId` spreads load uniformly right up until one video goes viral and its row hammers a single partition. The mitigations are read-path classics: replicate the hot range wider and put a distributed LRU metadata cache in front — metadata is kilobytes, so caching it is cheap and nearly always right, given the design already accepts availability over consistency.
+
+### 🌍 CDN
+`CDN` · `CDN`
+
+The **CDN** is the honest answer to *"what serves the video?"* — not the API, not the rendition store, but edge caches near viewers. The design's extreme read asymmetry (100M watches against 1M uploads per day, with each watch streaming hundreds of segment files) is resolved by *placement*: writes and processing land on infrastructure we run; reads — 99%+ of all traffic — land on infrastructure whose entire job is being near users.
+
+**Responsibilities**
+
+- Cache **both segments and manifests** at the edge. Cache segments only and every playback on earth still hits the origin for its manifest fetches — the startup path must be edge-local too.
+- Fill from the rendition store on miss, then serve every neighboring viewer from the edge.
+- Serve static, shared objects over plain HTTP — nothing per-viewer, nothing computed.
+
+That last point is load-bearing: the CDN can only do this job because *the server is dumb and the client is smart*. Every quality decision belongs to the player, so every object the CDN holds is identical for every viewer and therefore cacheable. A design that picks quality server-side breaks cacheability and un-invents the CDN.
+
+For a hot video, the entire watch session — manifest fetches, every segment at every quality — is served edge-local, and the origin sees exactly one request: the metadata lookup.
+
+**Where it breaks.** At the edges of its own economics: the first minutes of a viral video are fill traffic at every edge simultaneously, and the cold long tail is never cached anywhere — both land on the origin, which is precisely the residual duty it keeps.
+
+</details>
 
 ## ⚖️ Trade-offs
 

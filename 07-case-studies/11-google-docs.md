@@ -178,29 +178,115 @@ The fix is the one every event-sourced system reaches for: **snapshots and compa
 
 And here **version history** falls out as a byproduct. Compaction as described *discards* granular history — versioning is the exception that changes the retention story — but the mechanism needs only a policy tweak: keep superseded `documentVersionId`s and their snapshots instead of garbage-collecting them, and each becomes a named restore point; *"version history"* is the list of retained snapshots, *"restore"* a flip plus a new op on top. The op log made history *possible*; compaction makes it *cheap enough to keep*. (The retention spacing is a product decision; the real product's policy is not documented in our sources.)
 
-The whole final architecture once more, in C4 Container notation — pan and zoom; click any element for its doc (rendered live from this module's `google-docs.c4` model):
+The whole design as a **walkthrough** — three boards rather than one picture: the system in
+context, its containers, and the code level inside the document server. Any box carrying a link badge drills
+down a level; the ◀ ▶ ⌂ controls and the board menu walk back out.
 
-<iframe
-  src="/c4/view/sdfp_googledocs_container"
-  width="100%"
-  height="520"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Google Docs — C4 Container view (final architecture)"
-></iframe>
+```d2 boards name="c4-google-docs" root="System Context"
+direction: right
+
+classes: {
+  client: { style: { fill: "#f3f4f6"; stroke: "#6b7280"; font-color: "#111827" } }
+  data:   { style: { fill: "#ffedd5"; stroke: "#ea580c"; font-color: "#7c2d12" } }
+  edge:   { style: { fill: "#dbeafe"; stroke: "#2563eb"; font-color: "#1e3a8a" } }
+  svc:    { style: { fill: "#dcfce7"; stroke: "#16a34a"; font-color: "#14532d" } }
+}
+
+editor: "Editor\n[Person]" {
+  class: client
+  shape: person
+}
+
+sys: "Google Docs\n[Software System]" {
+  class: svc
+  link: layers.container
+}
+
+editor -> sys: "WebSocket: ops in, transformed ops + presence out"
+
+layers: {
+  container: {
+    direction: down
+
+    editor: "Editor\n[Person]" {
+      class: client
+      shape: person
+    }
+
+    gw: "Connection gateway\n[WebSocket gateway]" {
+      class: edge
+    }
+
+    doc_server: "Document server\n[Python · WebSockets]" {
+      class: svc
+      link: _.layers.code
+    }
+
+    op_log: "Operation log\n[Log store]" {
+      class: data
+      shape: cylinder
+    }
+
+    snapshots: "Snapshot store\n[Object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    meta: "Doc metadata DB\n[PostgreSQL]" {
+      class: data
+      shape: cylinder
+    }
+
+    gw -> doc_server: "ops routed by doc id (consistent hash)"
+    doc_server -> op_log: "append canonical ops"
+    doc_server -> snapshots: "periodic snapshot · cold-load read"
+    doc_server -> meta: "ACL check · snapshot pointer"
+  }
+
+  code: {
+    direction: down
+
+    doc_server: "Document server\n[Python · WebSockets]" {
+      class: svc
+
+      ot_engine: "OtEngine" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/11-google-docs/domain/ot_engine.py"
+      }
+      session_manager: "SessionManager" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/11-google-docs/domain/session_manager.py"
+      }
+      snapshotter: "Snapshotter" {
+        class: svc
+        link: "https://github.com/ani2fun/system-design-guide/blob/main/_proof-of-concepts/06-case-studies/11-google-docs/domain/snapshotter.py"
+      }
+    }
+
+    gw: "Connection gateway\n[WebSocket gateway]" {
+      class: edge
+    }
+
+    op_log: "Operation log\n[Log store]" {
+      class: data
+      shape: cylinder
+    }
+
+    snapshots: "Snapshot store\n[Object store]" {
+      class: data
+      shape: cylinder
+    }
+
+    doc_server.ot_engine -> doc_server.session_manager: "broadcast transformed ops"
+    doc_server.snapshotter -> doc_server.ot_engine: "reads the canonical sequence"
+    gw -> doc_server: "ops routed by doc id (consistent hash)"
+    doc_server.ot_engine -> op_log: "append"
+    doc_server.snapshotter -> snapshots: "write snapshot"
+  }
+}
+```
 
 ### 🛠️ Hands-on: run this design
-
-This design's low-level structure — the C4 **code level** inside the document server (click any box for its doc):
-
-<iframe
-  src="/c4/view/sdfp_googledocs_code"
-  width="100%"
-  height="480"
-  style="border: 1px solid var(--border, #2b2b2b); border-radius: 8px;"
-  loading="lazy"
-  title="Google Docs — C4 code level (inside the document server)"
-></iframe>
 
 A **runnable implementation** lives at `_proof-of-concepts/07-case-studies/11-google-docs/` in the repo root — a pure-Python `OtEngine`, `SessionManager`, and `Snapshotter` (mirroring the code view) behind a `DocumentServer`.
 
@@ -213,6 +299,184 @@ cd _proof-of-concepts/07-case-studies/11-google-docs
 `./run test` proves the hard part — the data type. Two editors inserting at position 0 from the same version both survive in one agreed order (`"" → "AB"`) because the second op is *transformed* against the first; two concurrent deletes of the same character don't double-delete (the second transforms to a **noop**); and folding the op log into a snapshot lets a cold load start from the checkpoint rather than replaying op #1. Operational Transformation is what makes concurrent edits converge without losing a keystroke.
 
 ---
+
+## 🧱 Component reference
+
+<details>
+<summary>10 components — what each one owns, the invariant it protects, and where it breaks</summary>
+
+### 👤 Editor
+`Actor` · `Human · browser tab · WebSocket`
+
+The **Editor** is one of up to ~100 people typing in the same document at the same time — and their browser tab is not a thin client. It holds a **local replica** of the document and applies every keystroke immediately (local echo inside a 16 ms frame budget), *before* the server confirms anything. That makes the tab a participant in the convergence algorithm, not just a display: it runs client-side OT too.
+
+**Responsibilities**
+
+- Apply each keystroke locally, instantly, then send `OP {docId, baseRev, op}` up the WebSocket — `baseRev` declares which document state the edit was authored against.
+- Transform incoming broadcast ops against its own not-yet-acked local ops before applying them — server and client see different arrival orders of the same ops; OT guarantees both converge.
+- On reconnect (server crash, ring change), re-run the connect-redirect dance and resync from the last acked revision, replaying buffered unacked ops.
+- Send cursor positions as ephemeral presence messages — never expecting them to be stored.
+
+The load-bearing habit is honesty about context: every op the editor sends says what it was looking at when it typed. Without `baseRev`, the server could not tell sequential edits from concurrent ones.
+
+**Where it breaks.** Long offline periods: an editor returning after an hour carries a queue of ops authored against an ancient revision — transformable in principle, but OT's correctness burden grows ugly with divergence. This design treats offline as short-lived disconnection; true offline-first is CRDT territory.
+
+### 🏢 Google Docs
+`System` · `Operational Transformation · event-sourced op log`
+
+**Google Docs** is a collaborative editing system, and its hard problem is not scale — it is the **data type**. In a document every keystroke is a write, and users notice every loss; last-write-wins, which silently discards one of two concurrent writes, is disqualified on contact. The system's contract is strong eventual consistency: any two replicas that have seen the same set of operations are in the same state, with no keystroke lost.
+
+**Responsibilities**
+
+- Converge concurrent edits via **Operational Transformation**: the server rewrites each incoming op against the concurrent ops it hadn't seen, so every replica applies the same effect in the same order.
+- Route every editor of document X to the **same document server** — OT needs one canonical op order, so one process per document is the ordering authority.
+- Persist **operations, not text**: the document is a fold over an append-only op log; the readable text is derived, recomputable state.
+- Keep cold loads fast by periodically folding the log into snapshots — and get version history nearly free by retaining the superseded ones.
+- Broadcast presence (cursors, membership) over the same sockets, entirely in memory — ephemeral data that dies with the connection.
+
+**Where it grows.** Scale lives in *document count* (billions), not per-document load: the ≤100-editor cap bounds each session, so fleet sizing follows connections. The celebrity problem is the hot document — mitigated by the cap itself, with overflow arrivals downgraded to readers.
+
+### 🚪 Connection gateway
+`API gateway` · `WebSocket gateway`
+
+The **Connection gateway** answers the routing question this architecture lives or dies on: which server does an editor's socket land on? Not *"any healthy one"* — a plain load balancer is exactly wrong here. OT requires all ops for a document to pass through **one transform-and-sequence point**, so every editor of document X must reach the *same* Document server. The gateway routes by **consistent hash of the document id**: `hash(docId)` names the single owner, and the connection lands there.
+
+**Responsibilities**
+
+- Accept an editor's initial HTTP connect naming the document, resolve the ring owner of `hash(docId)`, and steer the connection to it (in the lesson's mechanics, a non-owner redirects the client to the owner, which then upgrades to a WebSocket).
+- Track ring membership (the lesson keeps it in ZooKeeper) so routing follows server joins, leaves, and failures.
+- Stay out of the data path once the socket is pinned — ops, acks, and cursors flow editor-to-owner.
+
+Contrast with WhatsApp's gateway, which only needed *delivery* and could use sloppy pub/sub routing: here the requirement is **ordering authority**, so deterministic placement is non-negotiable.
+
+**Where it breaks.** Ring changes. Adding or removing a Document server is a state-migration event: displaced documents' connections drop and re-dial against the new owner, and both rings may see traffic mid-transition. A crash is the same event without the scheduling — which is why clients carry `baseRev` and buffered ops, turning reconnection into a resync rather than a data-loss window.
+
+### ⚙️ Document server
+`Service` · `Python · WebSockets`
+
+The **Document server** is the ordering authority — the single point every op for its documents must pass through, because OT's transform is defined relative to *one canonical sequence of operations*. Consistent hashing pins every editor of doc X to this one process, and co-location turns the whole session into local work: transform, sequence, append, and a ≤100-iteration broadcast loop over local sockets.
+
+**Responsibilities**
+
+- Decide, per incoming op, sequential vs concurrent by its `baseRev`; transform concurrent ops against the accepted ops they hadn't seen, assign the next revision.
+- Append the canonical op to the log and **only then** ack — *"acked"* means durably in the log; the text itself is derived state, `state = fold(ops)`.
+- Broadcast each transformed op to every other connected editor of the document.
+- Hold presence (membership, cursors) in memory only — ephemeral, never logged.
+- Fold cold documents into snapshots so cold loads replay a tail, not years of keystrokes.
+
+Three classes carry that work — the C4 code level, mirrored 1:1 by the forthcoming POC:
+
+```mermaid
+classDiagram
+    class OtEngine {
+        +apply(op, context) Op
+    }
+    class SessionManager {
+        +join(user, socket)
+        +leave(user)
+        +broadcast(op)
+    }
+    class Snapshotter {
+        +fold(doc_id) Snapshot
+    }
+    OtEngine --> SessionManager : broadcast transformed ops
+    Snapshotter --> OtEngine : reads the canonical sequence
+    note for OtEngine "transforms concurrent ops (baseRev < head) —\nsame effect in same order on every replica"
+    note for SessionManager "presence is ephemeral —\nin memory, dies with the socket, never logged"
+    note for Snapshotter "folds on idle/cadence —\ncold load = snapshot + op tail"
+```
+
+Each class maps to a file in the POC at `06-case-studies/examples/google-docs/app/` (deferred to the hands-on phase) — click the code-level boxes for their docs.
+
+**Where it breaks.** Statefulness: a deploy or crash is a mini ring-change — drain, let clients resync from their last acked revision, recycle. And the hot document cannot be salted: splitting one doc across servers is precisely what OT forbids, so the 100-editor cap and read-only overflow are the pressure valves.
+
+### 🧩 OtEngine
+`Code` · `Python`
+
+**OtEngine** owns `apply(op, context) Op` — the transform step that makes concurrent editing converge. Each incoming op declares its `baseRev`: the revision it was authored against. Authored against the head? Sequential — apply as-is. Authored against an older revision? Concurrent — rewrite its indices against every op accepted since, then apply, assign the next revision, and hand the transformed op to `SessionManager` for broadcast.
+
+**Responsibilities**
+
+- Classify each op sequential vs concurrent by comparing `baseRev` to the head revision.
+- Transform concurrent ops — case analysis over insert/delete pairs, shifting positions by what concurrent ops inserted or removed before them.
+- Assign revisions and append the canonical op to the log; the engine's accepted order *is* the document's one true sequence.
+
+**The invariant it maintains:** every replica applies the **same effect in the same order** — any two replicas that have seen the same ops are in the same state, no keystroke lost. Without transformation, the invariant fails visibly: the lesson's example has `Hello!`, user A inserts `, world` at 5 while B concurrently deletes position 6 (the `!`). Applied verbatim, B's delete lands on the comma — `Hello world!`, B's intent destroyed. Transformed to `DELETE(13)`, it lands on the `!` B meant: `Hello, world`, both edits preserved.
+
+**Where it breaks.** The case analysis is notoriously easy to get wrong, and the central sequencer is OT's scaling ceiling — one process per document, which the ≤100-editor cap keeps comfortable. Lands in the forthcoming POC at `06-case-studies/examples/google-docs/app/ot_engine.py`.
+
+### 🧩 SessionManager
+`Code` · `Python`
+
+**SessionManager** owns who is in this document *right now*: `join(user, socket)`, `leave(user)`, and `broadcast(op)` — the fan-out that delivers each transformed op to every other connected editor. Because consistent hashing pins all editors of a document to this one server, the broadcast is a for-loop over local sockets — at most ~100 iterations, never a distributed system.
+
+**Responsibilities**
+
+- Maintain the per-document in-memory session map: connected editors and their sockets.
+- Broadcast each transformed op from `OtEngine` to everyone but its author.
+- Handle presence: relay cursor-position deltas over the same sockets, seed a new joiner with the current cursor map from memory, broadcast removal on hangup.
+
+**The invariant it maintains:** presence is **ephemeral — it dies with the session and is never logged.** A cursor position is meaningful only while its socket lives, so it gets no database row anywhere: the connection *is* the registry. This is a deliberate asymmetry with ops — an op missing from the log is a lost keystroke, while a cursor missing from memory is a blink that self-heals on the next move. Persisting presence would buy a write path at cursor-move frequency for data nobody wants historically.
+
+**Where it breaks.** Server handoff: on a crash or ring change, the session map vanishes with the process — editors see cursors blink out, reconnect to the new owner, and presence rebuilds from live sockets. Cursor traffic is also the chattiest, least important message type, so clients batch and debounce it. Lands in the forthcoming POC at `06-case-studies/examples/google-docs/app/session_manager.py`.
+
+### 🧩 Snapshotter
+`Code` · `Python`
+
+**Snapshotter** owns `fold(doc_id) Snapshot` — the compaction step that keeps `state = fold(ops)` from meaning *"replay 4 months of keystrokes."* It reads the canonical sequence `OtEngine` has accepted, folds a log prefix into a single equivalent state, writes it to the snapshot store under a new `documentVersionId`, and flips the pointer in the metadata DB.
+
+**Responsibilities**
+
+- Fold: replay the op log (from the previous snapshot forward) into one collapsed state — in the limit, one big `INSERT`.
+- Write the result immutably under a fresh versionId, then flip the metadata pointer as the single atomic act — never mutate a snapshot in place.
+- Run at low priority, on cadence or when the last client disconnects — the server already holds the ops in memory and nobody is editing, so the fold is cheap and race-free.
+
+**The invariant it maintains:** a **cold load is snapshot + log tail** — snapshot-then-flip is invisible to correctness (folding a prefix then the suffix equals folding the whole log), and **compaction bounds replay**: the op tail behind the latest snapshot stays short, so cold-open cost and resident memory stay bounded no matter how old the document is.
+
+**Where it breaks.** Cadence is the trade-off: aggressive compaction destroys keystroke-level history unless superseded versionIds are deliberately retained (retain them and version history falls out free — each is a named restore point); lazy compaction preserves everything and pays on every cold open. Compaction lag is the metric to watch — every overdue document is a slow load waiting to happen. Lands in the forthcoming POC at `06-case-studies/examples/google-docs/app/snapshotter.py`.
+
+### 📜 Operation log
+`Log store` · `Log store (Cassandra, partitioned by documentId)`
+
+The **Operation log** is the system of record — and what it records is the design's defining decision. It never stores *"the text"* as its primary record; it stores the **operations**, append-only, partitioned by `documentId` and ordered within the partition. The document is a **fold over this log**: `state = fold(ops)`. This is event sourcing wearing an editor costume — the write path is a cheap sequential append that absorbs keystroke bursts (a pattern an LSM engine loves), the readable text is derived, recomputable state, and version history is a byproduct rather than a feature bolted on.
+
+**Responsibilities**
+
+- Accept the canonical, already-transformed op sequence from the Document server — the OT sequencer's order *is* the log order; every consumer replaying it in that order reaches the same state.
+- Back the ack: the server confirms an editor's op only after the durable append, so *"acked"* means *"in the log."*
+- Serve cold loads and owner handoffs: a new ring owner reloads a document by replaying its partition (from the latest snapshot forward).
+
+**Where it grows.** Without bound — that is the curse in the envelope. An hour of fluent typing appends roughly 1–2 MB of ops for perhaps 20 KB of final text; a living document touched daily for 4 months carries hundreds of thousands of ops, and a cold open must fold every one before rendering character one. Snapshots and compaction (the Snapshot store's job) are the fix; the log's own job is only to never lose an accepted op.
+
+### 🪣 Snapshot store
+`Object storage` · `Object store`
+
+The **Snapshot store** holds the periodic fold checkpoints that keep `state = fold(ops)` affordable. Event sourcing's gift is that the log is the document's complete biography; its curse is that the log only grows — and without checkpoints, a cold open of a two-year-old document would replay years of keystrokes before rendering character one. A snapshot collapses a log prefix into a single equivalent state (in the limit, one big `INSERT`), so a **cold load is the latest snapshot plus a short op tail**, not the complete works.
+
+**Responsibilities**
+
+- Store each fold result under a new `documentVersionId` — snapshots are immutable, written whole, read whole: object-store shaped data.
+- Make compaction safe for live documents: a new snapshot is written *beside* the old one, and the metadata DB's version pointer is **flipped** as the single atomic act — no in-place mutation to race a live session.
+- Turn version history into a retention policy: keep superseded versionIds instead of garbage-collecting them, and each becomes a named restore point; *"restore"* is a flip plus a new op on top.
+
+**Where it grows / breaks.** Compaction lag is the operational metric: every overdue document is a slow cold-load and a fat memory resident on its Document server waiting to happen. And the cadence is a real trade-off — aggressive compaction gives fast loads but destroys keystroke-level history unless versions are deliberately retained; lazy compaction keeps everything and pays for it on every cold open.
+
+### 🗄️ Doc metadata DB
+`Relational database` · `PostgreSQL`
+
+The **Doc metadata DB** holds everything about a document that is *not* its content: title, owner, sharing/ACLs, and — the load-bearing column — the **snapshot pointer** (`documentVersionId`). Content lives as ops in the log and folds in the snapshot store; this database is the small, relational, strongly-consistent index that says which document exists, who may touch it, and where its current checkpoint is. Ordinary CRUD (`POST /docs` creates the row) — deliberately boring, because the interesting state lives elsewhere.
+
+**Responsibilities**
+
+- Answer the ACL check when an editor joins a session: may this user open, edit, or only read document X?
+- Own the `documentVersionId` pointer — the single atomic act that makes compaction safe. A new snapshot is written beside the old one, then this pointer **flips**; readers before the flip fold the old version, readers after fold the new one, and nobody sees a torn state.
+- Route the flip through the Document server (the document's single owner) so a pointer swap can never race a live editing session.
+
+Note what it does *not* store: cursors and presence. That data's lifetime is the connection, so it lives in Document-server memory and dies with the socket — a write path for it would be churn at cursor-move frequency for data nobody wants historically.
+
+**Where it grows.** With document *count* — billions of small rows — not with editing activity. Keystrokes never touch this database; only creates, shares, and compaction flips do, which is what keeps PostgreSQL comfortable here.
+
+</details>
 
 ## ⚖️ Trade-offs
 
