@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Your app lets users upload profile pictures. Early on, the obvious design works: the browser POSTs the image to your API server, your server writes it to a database `BLOB` column or a local disk, done. Then the product grows. Users upload 4K videos. A single request is now 2 GB. Ten users upload at once and your API server — the same box that also serves login, search, and the news feed — is pinned at 100% network and memory, buffering gigabytes it doesn't even care about. It's acting as a very expensive, very slow pipe.
 

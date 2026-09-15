@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Let's design Ticketmaster."* Concerts, sports, theater: users browse events, search, and buy tickets to specific seats. Where [the URL shortener](/synapse/system-design-from-first-principles/case-studies/url-shortener) was the canonical *read-scaling* rep, this is the canonical *contention* rep: the moment tickets go on sale, millions arrive simultaneously to fight over a fixed number of seats — and selling the same seat to two people is the one unforgivable failure.
 

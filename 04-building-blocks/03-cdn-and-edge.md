@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You ship a product image, a JavaScript bundle, and a video from a single datacenter in Virginia. It is fast — for people near Virginia. A user in Mumbai clicks play and waits. Not because your servers are slow, but because the request must cross an ocean and back before the first frame even leaves the building.
 

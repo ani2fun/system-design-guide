@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 The single most common reason mid-level candidates fail a system-design interview is not that they lack knowledge — it is that they never deliver a complete, working system inside the slot. On the feedback form this shows up as the vague phrase *"time management,"* and it quietly ends more loops than any gap in distributed-systems theory. The cause, visible across thousands of mock interviews, is blunt: the problem usually isn't that you need to work twice as fast. It's that you spent your scarce minutes on the wrong things — polishing one clever corner while the rest of the system stayed a blank whiteboard.
 

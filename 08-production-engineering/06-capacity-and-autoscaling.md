@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You launch a service. Traffic is a gentle 2,000 requests per second, three boxes handle it with room to spare, and everyone goes home happy. Then a marketing push lands at 9 a.m. and load jumps to 12,000 requests per second in ninety seconds. The three boxes saturate. Latency, which sat comfortably at 40 ms, climbs to 400 ms, then to two seconds, then requests start timing out. By the time you have manually launched more machines and they have finished booting, the spike has already turned into an outage that trended on social media.
 

@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Design WhatsApp"* — or Messenger, or Telegram; interviewers use them interchangeably. Users send messages, one-to-one and in groups; messages arrive fast when the recipient is online and wait when they're not. This is the fourth rep of [the delivery framework](/synapse/system-design-from-first-principles/foundations/the-interview-at-10000-feet), and it earns its slot by breaking an assumption the first three never questioned. The [URL shortener](/synapse/system-design-from-first-principles/case-studies/url-shortener), [Ticketmaster](/synapse/system-design-from-first-principles/case-studies/ticketmaster), and the [news feed](/synapse/system-design-from-first-principles/case-studies/news-feed) are all request/response systems: a stateless server answers whoever asks and forgets them. Here the *server* must initiate delivery — a message for you has to find the machine currently holding your connection, out of hundreds. State moves into the serving tier, and that change drives everything interesting in this design.
 

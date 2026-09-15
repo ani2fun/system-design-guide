@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Design a news feed — Facebook's, say."* Users create posts and follow other users; opening the app shows recent posts from the people they follow, newest first; scrolling pages back through older ones. That's the entire product — and the third rep of [the delivery framework](/synapse/system-design-from-first-principles/foundations/the-interview-at-10000-feet) in this module, after the [URL shortener](/synapse/system-design-from-first-principles/case-studies/url-shortener) and [Ticketmaster](/synapse/system-design-from-first-principles/case-studies/ticketmaster). Where Ticketmaster was a contention problem and the shortener a read-scaling problem, this one is the canonical **fan-out** problem: one action by one user becomes work for millions.
 

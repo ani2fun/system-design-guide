@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Two systems must agree on what just happened, and there is no safe moment to tell them both.
 

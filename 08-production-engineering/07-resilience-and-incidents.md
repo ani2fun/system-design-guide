@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Here is the uncomfortable truth this whole module has been building toward: **at scale, something is always broken.** A cluster of 10,000 disks loses roughly one disk *every day* from normal wear [DDIA2 p.44]. Machines crash, kernels hit leap-second bugs, a dependency three hops away starts returning slow responses, a config change ships at 2 p.m. and takes out a region. DDIA puts it plainly: *"in a large enough system, one-in-a-million events happen every day"* [DDIA2 p.345]. You do not get to choose a world where nothing fails — only whether one failure stays small or takes everything with it.
 

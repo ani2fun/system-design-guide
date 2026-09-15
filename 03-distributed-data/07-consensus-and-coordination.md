@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Everything in the [Faults, Clocks & Time](/synapse/system-design-from-first-principles/distributed-data/faults-clocks-and-time) lesson pointed at one uncomfortable conclusion: a node can know almost nothing for certain about the other nodes. Silence is ambiguous, clocks disagree, and a process can black out mid-function and wake up to find the world has moved on. Yet a huge amount of what we want a distributed system to do reduces to a single, deceptively simple request:
 

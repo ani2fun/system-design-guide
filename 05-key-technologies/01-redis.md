@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 **"We'll put Redis in front of it" is the most-said sentence in system design, and the least examined.**
 

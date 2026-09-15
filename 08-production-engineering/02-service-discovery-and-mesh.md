@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Two services, A and B. A needs to call B. The most obvious thing in the world is to write B's address into A's config: `http://10.0.3.14:9001`. It works on your laptop, it works in the demo, and it survives roughly until the first time anything real happens.
 

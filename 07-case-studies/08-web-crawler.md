@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Design a web crawler"* — a program that starts from a set of seed URLs, downloads each page, extracts its text, discovers the links on it, and follows them, until it has swept (nearly) the whole reachable web. The modern motivation is crisp: the output corpus feeds an LLM training pipeline — the crawler is the front end of exactly the batch data-prep flow DDIA describes, where raw website text lands in an object store and is then cleaned, deduplicated, and tokenized [DDIA2 p. 479]. A search engine would bolt indexing and ranking on top; the interview focuses on the crawl itself either way.
 

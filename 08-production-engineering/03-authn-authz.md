@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 HTTP has no memory. Each request arrives at your server as a fresh stranger — the protocol was designed to be stateless, so nothing in a raw `GET /account` tells the server *whose* account this is or whether the caller is even allowed to see it. If you do nothing, every endpoint is wide open to the entire internet.
 

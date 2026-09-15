@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 On a single machine, software is comfortingly deterministic. Run the same function on working hardware and you get the same answer; when the hardware genuinely breaks, the machine usually crashes cleanly — a kernel panic, a blue screen — rather than quietly handing you a wrong result <abbr title="[p. 345]">[i]</abbr>. This is deliberate: a computer is designed to fail loudly rather than lie, because wrong results are far harder to cope with than a clean crash <abbr title="[p. 345]">[i]</abbr>.
 

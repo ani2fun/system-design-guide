@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You have a terabyte of web-server access logs and a simple question: which five URLs got the most hits yesterday? There is no request to answer, no user waiting on a spinner — just a big pile of data and an answer you want by morning. This is a fundamentally different shape of work from everything in the online world you have designed so far. An online service is judged by **response time**: a request comes in, you answer it as fast as you can, and availability is life-or-death because a human is waiting <abbr title="[p. 451]">[i]</abbr>. A batch job is judged by **throughput**: how much data it grinds through per unit time, running for minutes to days, usually on a schedule <abbr title="[p. 452]">[i]</abbr>. Nobody is waiting on any single record.
 

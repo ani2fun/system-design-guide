@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Ask a room of engineers to explain CAP and you will get a confident, fluent, and usually **wrong** answer: *"Consistency, Availability, Partition-tolerance — pick two."* It is the single most-cited result in system design, and also the most misquoted. The folklore version leads people to say things like *"MySQL is a CA database"* or *"we chose AP, so we gave up consistency"* — sentences that sound rigorous and mean almost nothing.
 

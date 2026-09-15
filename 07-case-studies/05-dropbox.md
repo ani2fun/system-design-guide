@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Design Dropbox"* — or Google Drive, or OneDrive; the brief is a cloud file-storage service: store files, get them back from any device, share them, and keep every device's copy in sync automatically. This is the fifth rep of [the delivery framework](/synapse/system-design-from-first-principles/foundations/the-interview-at-10000-feet), and it earns its slot by breaking an assumption the previous reps never questioned. The [URL shortener](/synapse/system-design-from-first-principles/case-studies/url-shortener) moved a few hundred bytes per request; [Ticketmaster](/synapse/system-design-from-first-principles/case-studies/ticketmaster) and the [news feed](/synapse/system-design-from-first-principles/case-studies/news-feed) moved kilobytes; [WhatsApp](/synapse/system-design-from-first-principles/case-studies/whatsapp) already shunted its media sideways to blob storage as a supporting detail. Here the payload *is* the product, and a single object can be **50 GB** — orders of magnitude past anything a request/response body was designed to carry. That one number invalidates the default architecture: you cannot POST it, you cannot buffer it, you cannot afford to route it through your compute tier at all.
 

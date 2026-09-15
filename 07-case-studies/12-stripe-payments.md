@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Every case study so far has had an escape hatch. The [ad-click aggregator](/synapse/system-design-from-first-principles/case-studies/ad-click-aggregator) could miscount a few clicks and apologize in the invoice. [Ticketmaster](/synapse/system-design-from-first-principles/case-studies/ticketmaster) could oversell a seat and compensate with a refund and an upgrade. A payment system is where the escape hatches run out: the data *is* money, every record is a legal fact, and *"we lost a little under load"* is not an incident — it's a regulator's opening question. This is the case study where **at-least-once delivery plus idempotence** stops being a pattern you name in an interview and becomes the entire product.
 

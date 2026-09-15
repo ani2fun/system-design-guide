@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Two people are messaging. Alice types *"on my way"* and hits send. It lands in the server's database in a few milliseconds. Bob, on the other side of the world, is staring at the same chat — and sees nothing. The server *knows* there is a new message. Bob's phone does not. The information exists; it just hasn't crossed the last hop to the client that cares about it.
 

@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You add a field — a single column, `deleted_at`, so rows can be soft-deleted instead of vanishing. You test it, you ship it. Mid-deploy, a support ticket lands: a record the customer clearly deleted has come back from the dead.
 

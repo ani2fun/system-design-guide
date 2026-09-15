@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You have followed every trick in the book. You added [read replicas](/synapse/system-design-from-first-principles/distributed-data/replication) so reads fan out across copies. You put a cache in front. You bought a bigger machine, then a bigger one. And still, one of two walls is coming.
 

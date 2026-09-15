@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Every company past a certain size runs on invisible clockwork: nightly billing runs, hourly reports, *"send this email at 10 AM Friday,"* retry queues that wake every few minutes. On one machine this is solved — `cron` has done it since the 1970s. This case study is what happens when the clockwork must survive the machine dying, and it is where half this book's distributed-systems theory reports for duty at once: leader election, leases, fencing tokens, unreliable clocks, at-least-once delivery, idempotence. If [Design a Payment System](/synapse/system-design-from-first-principles/case-studies/stripe-payments) was the exam for *never being wrong*, the job scheduler is the exam for *never being wrong about time*.
 

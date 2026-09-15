@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 A product manager asks a simple question: total revenue by product category, for every order in the last year. The orders live in the checkout database — a well-tuned relational store servicing carts, payments, and inventory thousands of times a second. So the query goes there: `SELECT category, SUM(net_price) FROM orders … GROUP BY category`, and the database dutifully begins reading a year of orders.
 

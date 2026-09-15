@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You are 4 months into a product. The codebase is one deployable — orders, billing, inventory, notifications, user profiles, all in one process, all talking to one database. It started clean. It is no longer clean. A change to the billing logic requires a full redeploy of everything, including the untouched notification code. Two teams keep colliding in the same files. A slow analytics query on the shared database occasionally drags down checkout. Someone read a blog post about Netflix and now there is a meeting on the calendar titled *"Migrate to microservices."*
 

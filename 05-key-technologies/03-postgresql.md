@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 **PostgreSQL should be your default, and "it's <abbr title="Atomicity, Consistency, Isolation, Durability — the four guarantees a transaction provides">ACID</abbr> compliant" is not why.**
 

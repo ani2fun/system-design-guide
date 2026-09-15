@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Let's design a URL shortener — something like Bitly."* That's the whole brief. You paste in `https://example.com/collections/summer-2026?ref=newsletter&utm_campaign=...`, you get back `short.ly/15ftgG`, and anyone who clicks the short link lands on the long one.
 

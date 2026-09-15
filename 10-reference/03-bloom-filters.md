@@ -16,7 +16,7 @@ essential: false
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 A Bloom filter answers exactly one question — *"have I seen this before?"* — and answers it in one of two ways:
 

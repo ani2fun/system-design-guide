@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You have version 1 of a service running on forty machines behind a load balancer, serving live traffic right now. You have version 2 built, tested, and ready. How do you get from one to the other?
 

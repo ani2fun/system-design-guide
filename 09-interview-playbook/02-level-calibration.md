@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Two candidates walk out of the same interview — *"Design Dropbox"* — having drawn almost the same boxes on the whiteboard. One gets a strong hire; the other gets a no-hire. They both produced a working design. So what separated them?
 

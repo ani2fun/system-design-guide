@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You have finished the book. You understand replication, partitioning, contention, fan-out, idempotency, and the delivery framework. And yet the first time you sit in front of a whiteboard with a stranger and hear *"design Uber,"* your mind goes blank, your requirements sprawl, and forty minutes later you have a diagram with no depth and no story.
 

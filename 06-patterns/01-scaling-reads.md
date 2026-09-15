@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Most systems you will ever design are read-heavy. A social feed, a product catalog, a news site, a URL shortener — for every write there are ten, a hundred, sometimes a thousand reads. The read-to-write ratio starts around 10:1 for a normal app and climbs past 100:1 for anything content-heavy. That asymmetry is the single most important fact about the workload, because it tells you exactly where to spend your effort: making reads cheap is worth almost any amount of extra work on the write path.
 

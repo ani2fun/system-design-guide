@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You launch a social app. The home page shows a user's profile with their follower count, a computed *"trending"* score, and a joined feed. Each page load runs a handful of queries against Postgres; each query takes 20–50 ms. At a few hundred users this is invisible. At ten million daily actives generating two hundred million reads a day, the database CPU sits pinned at 80% during peak, p99 latency balloons, and connections queue. You are one traffic spike away from a brownout.
 

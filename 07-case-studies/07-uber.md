@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Design Uber"* — a ride-hailing platform: riders request a ride, the system matches a nearby available driver, the driver accepts and drives. This is the seventh rep of [the delivery framework](/synapse/system-design-from-first-principles/foundations/the-interview-at-10000-feet), and it introduces something no previous case study had: **the hot dataset is physical reality**. In [Ticketmaster](/synapse/system-design-from-first-principles/case-studies/ticketmaster) the contended inventory sat still in rows; in [YouTube](/synapse/system-design-from-first-principles/case-studies/youtube) the bytes were big but inert. Here, the data the whole design pivots on — where every driver is *right now* — changes every few seconds for millions of entities at once, is stale the moment you store it, and worthless an hour later. And the thing being allocated isn't a row but a human who can be in exactly one car at a time. Two hard problems, one system: a **geospatial firehose** on the write side, **matching contention** on the allocation side.
 

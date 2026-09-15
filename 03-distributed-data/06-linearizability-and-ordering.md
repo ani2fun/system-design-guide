@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You replicate data so a machine can die without taking your service down. But the moment you keep more than one copy, you open a gap between them. A write lands on one replica; a read a millisecond later hits another that hasn't caught up. Now two clients, asking the same question at the same instant, get different answers. Replication buys fault tolerance and charges you inconsistency in return <abbr title="[p. 401]">[i]</abbr>.
 

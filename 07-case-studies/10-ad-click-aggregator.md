@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Every case study so far served a *user*. This one serves a *number* — and the number is money. An ad-click aggregator sits between two parties with opposite incentives: users clicking ads on a platform, and advertisers paying per click. The system's whole job is to count. But *"count things"* at 10,000 events per second, across a fleet of machines that crash, retry, and redeliver, while an advertiser refreshes a dashboard expecting sub-second answers about the last minute of traffic — that is the streaming-analytics interview in its canonical form. This is a data-processing question, not a product question: the delivery framework shifts weight from user-facing entities toward the **system interface** (what comes in, what goes out) and the **data flow** between them.
 

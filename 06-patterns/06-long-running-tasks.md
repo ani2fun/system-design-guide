@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 A user uploads a 20-minute video and taps **Publish**. Encoding it into six resolutions takes four minutes. A finance user clicks **Export** and the quarterly report scans ten million rows and renders a PDF — forty-five seconds. A marketer hits **Send** on a campaign to 10,000 recipients. In every case the *work* is real and unavoidable. The mistake is trying to do it **inside the HTTP request that asked for it.**
 

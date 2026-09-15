@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Your primary database — Postgres, MySQL, DynamoDB — is a magnificent general-purpose machine, and its index is a [B-tree or an LSM-tree](/synapse/system-design-from-first-principles/data-foundations/storage-engines). Both keep keys **sorted in one dimension**, and almost every query you have ever written exploits exactly that: find the row whose key equals X, or whose key falls in the range [X, Y]. Point lookups and one-dimensional ranges are the whole game.
 

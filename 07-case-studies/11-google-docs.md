@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Every case study until now shared one merciful property: the data was easy, and the hard part was around it. Dropbox moved big immutable blobs; WhatsApp delivered small immutable messages; the ad-click aggregator counted immutable events. Here, two people hold the *same mutable value* — a string of text — and change it simultaneously, hundreds of times a minute, each expecting their own keystroke instantly and everyone else's within a blink. The hard problem is not throughput, storage, or fan-out. It is **the data type itself**: what does it even mean for concurrent edits to the same sentence to both *"win"*?
 

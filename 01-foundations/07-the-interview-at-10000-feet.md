@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 **The most common reason candidates fail a system-design interview is not a knowledge gap.**
 

@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 A user taps **Pay $50**. Your payment service calls the card network, the charge succeeds, and the service starts writing the confirmation back to the user — and right then the response is lost. Maybe the user's phone dropped off Wi-Fi, maybe a load balancer timed out, maybe a network blip swallowed the packet. The user sees a spinner, then an error. What do they do? They tap **Pay $50** again.
 

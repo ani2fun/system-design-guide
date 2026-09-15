@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You have a table of a million product reviews. The `title` column is indexed with a B-tree, so `WHERE title = 'Great sound, terrible battery'` is instant, and `WHERE title LIKE 'Great%'` is fast too. Now the product manager asks for the feature every user actually wants: a search box. Type `battery`, and get back every review that *mentions* battery — anywhere in the title or body, in any position.
 

@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Book a holiday: reserve a flight, then a hotel, then a rental car. Three separate providers, three separate systems. Now the car company has nothing available on your dates. What happens to the flight and hotel you already booked?
 

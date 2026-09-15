@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 **You have a `users` table with fifty million rows, and your login endpoint runs `SELECT * FROM users WHERE email = ?`.**
 

@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Two customers hit *"buy"* on the last concert ticket at the same millisecond. Your handler reads `seats_left = 1`, decides the sale is valid, writes `seats_left = 0`, and confirms. Both handlers did exactly that — and you've now sold one seat twice. Nothing crashed. No exception fired. Each line of code was correct in isolation. The bug lives *between* the two executions, in the interleaving your code never wrote down.
 

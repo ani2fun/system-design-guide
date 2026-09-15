@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Design YouTube"* — a video-sharing platform where users upload videos and other users watch them. Two functional requirements, and that brevity is the trap. This is the sixth rep of [the delivery framework](/synapse/system-design-from-first-principles/foundations/the-interview-at-10000-feet), and where [Dropbox](/synapse/system-design-from-first-principles/case-studies/dropbox) broke the assumption that a payload fits in a request, YouTube breaks a subtler one: that the thing you store is the thing you serve. A file-storage service hands back the bytes it received. A video platform receives *one* file and serves *hundreds* of derived files — segments, renditions, manifests — manufactured by a processing pipeline that sits between upload and playback and is by far the most computationally expensive thing in the design. Upload, process, serve: three stages, three scales, three bottlenecks.
 

@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 There is one aisle seat left for Friday's show. At 7:00:00.000 pm, four hundred people are staring at it, and two of them tap **Buy** in the same tenth of a second. Both of their requests read the database, both see `seats_available = 1`, both conclude *"yes, there's a seat,"* and both write `seats_available = 0` and insert a ticket. The counter ends at 0 — which looks correct — but two tickets exist for one seat. Someone is going to fly across the country and be turned away at the door.
 

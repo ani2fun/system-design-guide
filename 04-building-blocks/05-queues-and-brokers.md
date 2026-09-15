@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Picture a checkout service. A customer clicks *"Buy,"* and now six things need to happen: charge the card, decrement inventory, email a receipt, notify the warehouse, update the recommendation model, and refresh the analytics dashboard. If the web request does all six inline, the customer stares at a spinner for two seconds — and if the email provider is having a bad day, the *purchase itself* fails because a downstream, non-critical step timed out. You have coupled the customer's latency and the customer's success to the slowest, flakiest thing in the building.
 

@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Scaling reads is, at bottom, a copying problem. A read touches data that already exists and does not change it, so you can make more copies — read replicas, caches, CDN edges — and point readers at whichever copy is nearest or least busy. Copies are cheap and they compose: ten replicas serve roughly ten times the read traffic. If a piece of data gets hot, you copy it more.
 

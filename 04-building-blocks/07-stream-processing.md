@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 A batch job has a comforting property: its input is *finished*. Yesterday's clickstream is a file of known size sitting in object storage. You can sort it, scan it start-to-end, join it, and when the last record is read you know the answer is complete. [Batch processing](/synapse/system-design-from-first-principles/building-blocks/queues-and-brokers) trades latency for that certainty — you wait until midnight, then compute over a bounded chunk.
 

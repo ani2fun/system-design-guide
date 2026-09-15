@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 **You are handed a feature:** *"show each user their home timeline — the recent posts from everyone they follow."*
 

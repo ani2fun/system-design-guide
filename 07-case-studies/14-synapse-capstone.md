@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Design an **interactive learning platform**: books of technical lessons with rendered diagrams,
 code the reader can edit and **run in the browser page**, and practice problems judged against a

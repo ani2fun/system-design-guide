@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 On a single node, *"commit"* is a physical event you can point at. The storage engine writes your data durably (to the write-ahead log), then appends a **commit record**. The deciding moment is when the disk finishes writing that record: before it, a crash aborts the transaction and discards the writes; after it, the transaction is committed and its effects are permanent <abbr title="[p. 323]">[i]</abbr>. One disk controller on one machine makes the outcome atomic — all-or-nothing — because there is exactly one place where the decision lives.
 

@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You did the estimation and one server won't do. Traffic is 50,000 requests per second, a single machine tops out around a few thousand, and even one giant box is a single fuse: when it reboots, everyone is down. So you run many identical copies and spread work across them — [horizontal scaling](/synapse/system-design-from-first-principles/foundations/nonfunctional-requirements) — which creates a new problem: *which* copy handles the next request?
 

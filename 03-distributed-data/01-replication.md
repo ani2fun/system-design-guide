@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 You have one database on one machine, and it is working fine — until the machine isn't there. A disk dies, a datacenter loses power, a kernel patch reboots the box, and suddenly your entire service is down because the only copy of the data was on the thing that just failed. So you keep a second copy on another machine. Now you have durability against a single failure, and a bonus: reads can be served from either copy, doubling your read throughput. Push the copies out to other continents and users everywhere get local-latency reads. Availability, read-scaling, low latency — replication buys all three at once <abbr title="(p. 197)">[i]</abbr>.
 

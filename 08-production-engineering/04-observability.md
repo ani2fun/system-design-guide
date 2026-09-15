@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 It is 3 a.m. and checkouts are failing. A dashboard shows the error rate climbing, but the dashboard cannot tell you *why*. Is it the payment service? The database it talks to? A single bad host? A dependency three hops away that started returning slow responses? You have thousands of machines, dozens of services, and a request that touches ten of them before a user ever sees an error. The system is running — you just have no idea what it is doing.
 

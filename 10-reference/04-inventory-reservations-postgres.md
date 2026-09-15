@@ -16,7 +16,7 @@ essential: false
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 Checkout has a race condition. Between *"buyer clicks pay"* and *"payment settles"*, seconds pass. During that window another buyer can try to buy the same last unit. Get it wrong one way and you **oversell** — cancel the order, apologise, eat the support cost. Get it wrong the other way and you **undersell** — tell a buyer it's gone when it isn't.
 

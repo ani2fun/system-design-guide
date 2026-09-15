@@ -10,7 +10,7 @@ essential: true
 
 ---
 
-## 🧨 The problem (why this exists)
+## 🤷 Why Bother?
 
 *"Design a rate limiter"* is a different *kind* of interview than the eight designs before it, and saying so out loud is the first point you score. Every previous case study was a product. This is an **infrastructure component**: its *"user"* is another engineer's service, and its entire API is a single decision — *may this request proceed?* — returned with a yes, a no, and a few headers. What replaces the product surface is a harder demand: **correctness under concurrency is the product** — a rate limiter that miscounts under load isn't a rate limiter with a bug; it's not a rate limiter. Interviewers pitch this question very differently, from near-code low-level design to distributed-systems architecture; the most common path, and ours, balances the two.
 
