@@ -660,8 +660,8 @@ designs them from first principles.
   the category declarations and the one shared C4 specification every diagram in this book depends on.
   The platform reads its library from several repositories at once and merges them into a single
   catalog, which is how this book is maintained on its own without its URL moving.
-- [Synapse App From Scratch](/synapse/synapse-app-from-scratch/index) — the companion book that
-  documents this exact system in depth: architecture, the ten bounded contexts, the measured numbers,
+- [Synapse — Part 2, the deep dive](/synapse/synapse-features/index) — the second half of the Synapse
+  book, which documents this exact system in depth: architecture, the ten bounded contexts, the measured numbers,
   and the content pipeline that turned this lesson into a page.
 
 ---
