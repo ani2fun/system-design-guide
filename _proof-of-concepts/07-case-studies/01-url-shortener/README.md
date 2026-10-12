@@ -3,7 +3,7 @@
 A runnable implementation of the **Design a URL Shortener** case study
 (`system-design-from-first-principles/06-case-studies/url-shortener`). The four
 classes here mirror, 1:1, the C4 **code**-level elements in
-`06-case-studies/url-shortener.c4` — so the diagram you read *is* this code's map.
+the **code** board of the D2 walkthrough in `07-case-studies/01-url-shortener.md` — so the diagram you read *is* this code's map.
 
 | C4 code element | File | Role |
 | --- | --- | --- |
@@ -12,7 +12,7 @@ classes here mirror, 1:1, the C4 **code**-level elements in
 | `RangeLease` | [`app/range_lease.py`](app/range_lease.py) | leases disjoint counter ranges by atomic fetch-and-add |
 | `RedirectHandler` | [`app/redirect_handler.py`](app/redirect_handler.py) | `GET /{code}`: cache → store → 302, fire-and-forget click |
 
-Containers (from the C4 container view): a stateless **FastAPI** API, a
+Containers (from the walkthrough's container board): a stateless **FastAPI** API, a
 **Redis** redirect cache, a **Postgres** link store, a Postgres **id range
 allocator** row, and a **Redis Stream** click feed.
 

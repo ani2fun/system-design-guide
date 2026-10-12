@@ -6,7 +6,8 @@ the invariant the whole design exists to protect: **never sell one seat twice**,
 even when thousands of buyers stampede the same seat at on-sale.
 
 The three classes here mirror, 1:1, the C4 **code**-level elements inside the
-booking service in `06-case-studies/ticketmaster.c4`:
+booking service, on the **code** board of the D2 walkthrough in
+`07-case-studies/02-ticketmaster.md`:
 
 | C4 code element | File | Role |
 | --- | --- | --- |

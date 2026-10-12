@@ -9,7 +9,7 @@ feed at read time — the escape from the "one post → tens of millions of writ
 trap.
 
 The four classes mirror, 1:1, the C4 **code**-level elements in
-`06-case-studies/news-feed.c4`:
+the **code** board of the D2 walkthrough in `07-case-studies/03-news-feed.md`:
 
 | C4 code element | File | Role |
 | --- | --- | --- |
@@ -18,7 +18,7 @@ The four classes mirror, 1:1, the C4 **code**-level elements in
 | `FanoutConsumer` | [`worker/fanout_consumer.py`](worker/fanout_consumer.py) | at-least-once consume of post events off the queue |
 | `TimelineFanout` | [`worker/timeline_fanout.py`](worker/timeline_fanout.py) | insert post id into each follower's timeline; skip celebrities |
 
-Containers (from the C4 container view): a **FastAPI** feed API, a **separate
+Containers (from the walkthrough's container board): a **FastAPI** feed API, a **separate
 fan-out worker** process, a **Postgres** post store + follow graph, a **Redis
 Stream** fan-out queue, and a **Redis** timeline cache.
 

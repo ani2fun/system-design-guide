@@ -657,7 +657,7 @@ designs them from first principles.
   [`_proof-of-concepts/`](https://github.com/ani2fun/system-design-guide/tree/main/_proof-of-concepts)
   directory that backs every *other* case study above.
 - [ani2fun/synapse-content](https://github.com/ani2fun/synapse-content) — the content spine: the blog,
-  the category declarations and the one shared C4 specification every diagram in this book depends on.
+  the category declarations and the shared D2 theme and component library every diagram in this book is drawn with.
   The platform reads its library from several repositories at once and merges them into a single
   catalog, which is how this book is maintained on its own without its URL moving.
 - [Synapse — Part 2, the deep dive](/synapse/synapse-features/index) — the second half of the Synapse
