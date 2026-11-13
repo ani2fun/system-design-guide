@@ -225,9 +225,9 @@ The three pillars — metrics, logs, traces — in the open-source stack that de
 ## 📚 Sources
 
 - DDIA2 ch. 2 pp. 38–42 (response-time percentiles, tail-latency amplification, SLI/SLO/SLA, histograms — the percentile/SLO grounding); pp. 53–54 (operability, monitoring, and observability as maintainability).
-- [web: Google SRE Book, *"Monitoring Distributed Systems"*](https://sre.google/sre-book/monitoring-distributed-systems/) — four golden signals; symptom-based alerting.
-- [web: Google SRE Book, *"Service Level Objectives"*](https://sre.google/sre-book/service-level-objectives/) and *"Embracing Risk"* — SLI/SLO and the error-budget discipline.
-- [web: Tom Wilkie, *"The RED Method"*](https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/) — Rate, Errors, Duration for request-driven services.
-- [web: Brendan Gregg, *"The USE Method"*](https://www.brendangregg.com/usemethod.html) — Utilization, Saturation, Errors for resources.
-- [web: OpenTelemetry documentation](https://opentelemetry.io/docs/concepts/signals/) — traces, spans, and context propagation across services.
+- <a href="https://sre.google/sre-book/monitoring-distributed-systems/" target="_blank" rel="noopener noreferrer">web: Google SRE Book, *"Monitoring Distributed Systems"*</a> — four golden signals; symptom-based alerting.
+- <a href="https://sre.google/sre-book/service-level-objectives/" target="_blank" rel="noopener noreferrer">web: Google SRE Book, *"Service Level Objectives"*</a> and *"Embracing Risk"* — SLI/SLO and the error-budget discipline.
+- <a href="https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/" target="_blank" rel="noopener noreferrer">web: Tom Wilkie, *"The RED Method"*</a> — Rate, Errors, Duration for request-driven services.
+- <a href="https://www.brendangregg.com/usemethod.html" target="_blank" rel="noopener noreferrer">web: Brendan Gregg, *"The USE Method"*</a> — Utilization, Saturation, Errors for resources.
+- <a href="https://opentelemetry.io/docs/concepts/signals/" target="_blank" rel="noopener noreferrer">web: OpenTelemetry documentation</a> — traces, spans, and context propagation across services.
 - Cross-links: [Latency, Throughput & Percentiles](/synapse/system-design-from-first-principles/foundations/latency-throughput-percentiles) · [Nonfunctional Requirements](/synapse/system-design-from-first-principles/foundations/nonfunctional-requirements) · [Specialized Stores](/synapse/system-design-from-first-principles/building-blocks/specialized-stores) · [Service Architecture](/synapse/system-design-from-first-principles/production-engineering/service-architecture).

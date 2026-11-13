@@ -668,11 +668,11 @@ designs them from first principles.
 
 ## 📚 Sources
 
-- [ani2fun/synapse](https://github.com/ani2fun/synapse) — the implementation this lesson describes:
+- <a href="https://github.com/ani2fun/synapse" target="_blank" rel="noopener noreferrer">ani2fun/synapse</a> — the implementation this lesson describes:
   the architecture decision records (`docs/adr/`), the architecture docs (`docs/architecture/`), and
-  the [scaling plan](https://github.com/ani2fun/synapse/blob/main/docs/architecture/scaling-plan.md) whose
+  the <a href="https://github.com/ani2fun/synapse/blob/main/docs/architecture/scaling-plan.md" target="_blank" rel="noopener noreferrer">scaling plan</a> whose
   napkin math this lesson shares.
-- [go-judge](https://github.com/criyle/go-judge) — the sandbox: namespace/cgroup isolation, process
+- <a href="https://github.com/criyle/go-judge" target="_blank" rel="noopener noreferrer">go-judge</a> — the sandbox: namespace/cgroup isolation, process
   pooling, and the quota model the run path builds on.
 - [Design a News Feed](/synapse/system-design-from-first-principles/case-studies/news-feed) — the
   derived-data and materialized-view reasoning this lesson applies to content
